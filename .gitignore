@@ -14,15 +14,21 @@ best.pth
 arcade/
 arcade.zip
 temp/
+data/
+
+# Training outputs
+*.log
+training_log.csv
+training_plot.png
+samples/
 
 # macOS
 .DS_Store
-samples/.DS_Store
-samples/**/.DS_Store
+
+# Local notes (not tracked)
+TODO.md
+CLAUDE.md
 
 # Sonstiges
 *.zip
-
-samples/
 prepare_masks.py
-arcade/

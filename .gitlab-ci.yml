@@ -1,0 +1,20 @@
+stages:
+  - test
+
+variables:
+  AUTO_DEVOPS_DISABLED: "true"
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  paths:
+    - .cache/pip
+
+smoke_test:
+  stage: test
+  image: python:3.11-slim
+  before_script:
+    - pip install --upgrade pip
+    - pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cpu
+    - pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+  script:
+    - python train.py --smoke_test --smoke_size 20 --epochs 1 --batch_size 1 --device cpu

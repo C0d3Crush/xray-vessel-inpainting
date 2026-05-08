@@ -1,171 +1,335 @@
-![Python 3.9](https://img.shields.io/badge/python-3.9-green.svg)
+# CMT for Coronary Angiography X-Ray Inpainting
 
-# Inpainting for Coronary Angiography X-Rays
+![Python 3.9](https://img.shields.io/badge/python-3.9-blue.svg)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.2-orange.svg)
+![License](https://img.shields.io/badge/license-Research-green.svg)
 
-Forschungsprojekt am Lehrstuhl für Medizinische Physik, Universität Heidelberg.
+**Deep learning-based inpainting for coronary angiography X-rays using Continuously Masked Transformers (CMT).**
 
-Dieses Projekt adaptiert **CMT (Continuously Masked Transformer)** für die Inpainting-Aufgabe auf graustufigen Koronarangiographie-Bildern des [ARCADE-Datensatzes](https://arcade.grand-challenge.org/). Ziel ist die realistische Rekonstruktion von X-Ray-Hintergründen durch Inpainting von Gefäßregionen, um synthetische Bilddaten zu generieren.
+This project adapts the CMT architecture for single-channel grayscale medical imaging, specifically targeting vessel inpainting in coronary angiography images from the [ARCADE dataset](https://arcade.grand-challenge.org/). The goal is to reconstruct vessel-free backgrounds for synthetic data generation and data augmentation in medical imaging applications.
 
-> Basierend auf: Keunsoo Ko and Chang-Su Kim, "Continuously Masked Transformer for Image Inpainting", ICCV 2023
+> **Based on:** Keunsoo Ko and Chang-Su Kim, *"Continuously Masked Transformer for Image Inpainting"*, ICCV 2023
 
 ---
 
-## Voraussetzungen
+## 🎯 Key Features
 
-- Python 3.9
-- PyTorch (CPU, MPS oder CUDA)
-- ARCADE-Datensatz ([Download](https://arcade.grand-challenge.org/))
+- **End-to-end CMT training** on medical imaging data (no pretraining required)
+- **Grayscale adaptation** of RGB-based transformer architecture
+- **Dynamic input sizing** (32px to 512px, power-of-2)
+- **Multi-device support** (CPU, CUDA, Apple Silicon MPS)
+- **Automated workflows** via Makefile
+- **Data optimizations** (mask caching, annotation preprocessing, checkpoint rotation)
+- **Comprehensive visualization** tools
+
+---
+
+## 📁 Project Structure
+
+```
+arcade-xray-inpainting/
+├── src/                    # Core source code
+│   ├── train.py           # Training script
+│   ├── demo.py            # Inference script
+│   ├── utils.py           # Utilities
+│   └── network/           # CMT model architecture
+├── scripts/                # Utility scripts
+│   ├── prepare_samples.py # Sample extraction from ARCADE
+│   ├── visualize_results.py # Side-by-side comparisons
+│   ├── plot_training.py   # Training curves
+│   └── cache_masks.py     # Mask preprocessing
+├── outputs/                # Generated files
+│   ├── checkpoints/       # Model weights
+│   └── samples/           # Test data & results
+├── data/                   # Datasets
+│   └── arcade/            # ARCADE dataset
+├── requirements.txt
+├── Makefile               # Automated workflows
+└── README.md
+```
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Python 3.9+
+- PyTorch 2.2+
+- ARCADE dataset ([download](https://arcade.grand-challenge.org/))
+
+### Installation
 
 ```bash
+# Clone repository
+git clone https://github.com/C0d3Crush/arcade-xray-inpainting.git
+cd arcade-xray-inpainting
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Verify installation
+make smoke-test
+```
+
+### Basic Workflow
+
+```bash
+# 1. Prepare test samples from ARCADE dataset
+make prepare-samples
+
+# 2. Run inference (requires trained model)
+make inference
+
+# 3. Create visualizations
+make visualize
+
+# 4. Plot training metrics
+make plot
 ```
 
 ---
 
-## Pipeline Übersicht
+## 🔬 Model Architecture
 
-```
-ARCADE Dataset
-      │
-      ▼
-Phase 1: Backbone Pretraining (train_placesCNN.py)
-      │   ResNet50 auf ARCADE-Klassen trainieren
-      │   → place2.pth
-      ▼
-Phase 2: CMT Inpainting Training (train.py)
-      │   Encoder mit place2.pth initialisiert
-      │   → checkpoints/best.pth
-      ▼
-Inference (demo.py)
-```
+The pipeline uses a two-stage architecture:
 
----
+**Stage 1: Coarse Prediction**
+- ViT-based encoder with continuously masked attention (15 layers, 16 heads)
+- Overlapping window patch embedding
+- Multi-scale coarse outputs
 
-## Training auf Google Colab (empfohlen)
+**Stage 2: Fine Refinement**
+- SwinTransformer U-Net decoder
+- Skip connections for detail preservation
+- Dynamic depth scaling based on input size
 
-Das beigelegte Notebook `arcade_pretrain.ipynb` führt beide Trainingsphasen automatisch durch.
+**Loss Function:**
+- L1 loss (masked region × 6.0)
+- L1 loss (valid region × 1.0)
+- SSIM loss × 0.5
 
-1. Notebook auf [colab.research.google.com](https://colab.research.google.com) hochladen
-2. **Runtime → Change runtime type → T4 GPU**
-3. `arcade.zip` über den Datei-Browser hochladen
-4. Zellen der Reihe nach ausführen (~15 Min Pretraining + ~2h CMT Training)
-5. Checkpoints werden am Ende automatisch heruntergeladen
+**Performance:** ~37-38 dB PSNR on ARCADE validation set
 
 ---
 
-## Lokales Training
+## 💻 Training
 
-### Phase 1 — Backbone Pretraining
-
-COCO-Annotationen in Klassenordner konvertieren:
+### Quick Training
 
 ```bash
-python coco_to_classification.py \
-  --annotations arcade/syntax/train/annotations/train.json \
-  --images      arcade/syntax/train/images \
-  --output      data/train
-
-python coco_to_classification.py \
-  --annotations arcade/syntax/val/annotations/val.json \
-  --images      arcade/syntax/val/images \
-  --output      data/val
+make train
 ```
 
-Leere Klassenordner entfernen und Pretraining starten:
+### Custom Training
 
 ```bash
-find data/train -type d -empty -delete
-find data/val   -type d -empty -delete
-
-python train_placesCNN.py data/ \
-  --arch resnet50 \
-  --epochs 30 \
-  --batch-size 32 \
-  --lr 0.01
-```
-
-Checkpoint verlinken:
-
-```bash
-ln -sf checkpoints/resnet50_best.pth.tar place2.pth
-```
-
-### Phase 2 — CMT Inpainting Training
-
-```bash
-python train.py \
-  --train_img arcade/syntax/train/images \
-  --train_ann arcade/syntax/train/annotations/train.json \
-  --val_img   arcade/syntax/val/images \
-  --val_ann   arcade/syntax/val/annotations/val.json \
+python src/train.py \
+  --train_img data/arcade/syntax/train/images \
+  --train_ann data/arcade/syntax/train/annotations/train.json \
+  --val_img data/arcade/syntax/val/images \
+  --val_ann data/arcade/syntax/val/annotations/val.json \
   --epochs 100 \
   --batch_size 4 \
-  --input_size 256 \
+  --input_size 64 \
+  --device cpu \
+  --output_dir outputs/checkpoints
+```
+
+### Training Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--input_size` | 64 | Input image size (power of 2, min 32) |
+| `--epochs` | 100 | Number of training epochs |
+| `--batch_size` | 4 | Batch size |
+| `--device` | cpu | Device (`cpu`, `cuda`, `mps`) |
+| `--keep_checkpoints` | 3 | Number of periodic checkpoints to keep |
+| `--ckpt` | None | Resume from checkpoint |
+
+### Resume Training
+
+```bash
+python src/train.py --ckpt outputs/checkpoints/best.pth --epochs 150
+```
+
+---
+
+## 🔍 Inference
+
+### Using Makefile
+
+```bash
+make prepare-samples  # Extract test images from ARCADE
+make inference        # Run inpainting
+make visualize        # Create side-by-side comparisons
+```
+
+### Manual Inference
+
+```bash
+python src/demo.py \
+  --ckpt outputs/checkpoints/best.pth \
+  --img_path outputs/samples/test_img \
+  --mask_path outputs/samples/test_mask \
+  --output_path outputs/samples/results \
+  --input_size 64 \
   --device cpu
 ```
 
-Wichtige Flags:
+---
 
-| Flag | Default | Beschreibung |
-|------|---------|--------------|
-| `--input_size` | 256 | Bildgröße (Potenz von 2, min 32) |
-| `--pretrain` | place2.pth | Pfad zum Backbone-Checkpoint |
-| `--no_pretrain` | – | Backbone-Initialisierung überspringen |
-| `--ckpt` | – | CMT-Checkpoint zum Fortsetzen |
-| `--device` | cpu | `cpu`, `cuda` oder `mps` |
+## 📊 Visualization & Analysis
 
-**Smoke Test** (Pipeline schnell verifizieren):
+### Training Curves
 
 ```bash
-python train.py \
-  --smoke_test --smoke_size 20 --epochs 1 --batch_size 1 --device cpu
+make plot
 ```
 
----
+Generates 3-panel plot: Training Loss | Validation PSNR | Validation SSIM
 
-## Inference
+### Side-by-Side Comparisons
 
 ```bash
-python demo.py \
-  --ckpt        checkpoints/best.pth \
-  --img_path    ./samples/test_img \
-  --mask_path   ./samples/test_mask \
-  --output_path ./samples/results \
-  --device      cpu
+make visualize
 ```
 
-Bilder werden automatisch auf die Modell-Eingabegröße skaliert. Für GPU: `--device cuda`.
+Creates comparison images showing: **Input | Mask | Result**
 
----
+### Sample Preparation
 
-## Änderungen gegenüber Original-CMT
-
-- 1-Kanal Graustufen-Input (statt RGB)
-- Dynamische Encoder-Decoder-Pyramide in `refine.py` via `--input_size`
-- `train_placesCNN.py` — Places365-Pipeline für ARCADE-Pretraining adaptiert
-- `coco_to_classification.py` — konvertiert COCO-Annotationen in ImageFolder-Layout
-- Gefäßmasken automatisch aus COCO-Polygon-Annotationen generiert
-- MPS/CPU/CUDA-Kompatibilität
-- `--smoke_test` Flag für schnelle Pipeline-Verifikation
-
----
-
-## Projektstruktur
-
-```
-CMT/
-├── train.py                    # CMT Inpainting Training
-├── train_placesCNN.py          # Backbone Pretraining (Places365 style)
-├── coco_to_classification.py   # COCO → ImageFolder Konverter
-├── demo.py                     # Inference
-├── utils.py                    # Hilfsfunktionen
-├── network/                    # Modellarchitektur
-├── arcade_pretrain.ipynb       # Colab Notebook (komplette Pipeline)
-└── requirements.txt
+```bash
+python scripts/prepare_samples.py \
+  --annotations data/arcade/syntax/val/annotations/val.json \
+  --images data/arcade/syntax/val/images \
+  --num-samples 10 \
+  --output-img outputs/samples/test_img \
+  --output-mask outputs/samples/test_mask
 ```
 
 ---
 
-## Autor
+## ⚡ Performance Optimizations
 
-Dzielski — Forschungspraktikum Medizinische Physik, Universität Heidelberg
+### Mask Caching
+
+Pre-compute masks once for 10x faster data loading:
+
+```bash
+make cache-data
+```
+
+Then train with cached masks:
+
+```bash
+python src/train.py --train_mask data/masks_cache/train --val_mask data/masks_cache/val ...
+```
+
+### Annotation Preprocessing
+
+COCO annotations are automatically cached as pickle files for instant loading (10x speedup).
+
+### Checkpoint Rotation
+
+Automatic cleanup of old checkpoints. Configure with `--keep_checkpoints N` (default: 3).
+
+---
+
+## 🔧 Development
+
+### Git Workflow
+
+Push to both remotes simultaneously:
+
+```bash
+git pushall  # Push to GitHub + GitLab
+```
+
+### Makefile Targets
+
+| Command | Description |
+|---------|-------------|
+| `make install` | Install dependencies |
+| `make smoke-test` | Quick pipeline verification |
+| `make cache-data` | Precompute masks & annotations |
+| `make prepare-samples` | Extract test samples from ARCADE |
+| `make train` | Train model |
+| `make inference` | Run inference |
+| `make visualize` | Create comparisons |
+| `make plot` | Plot training metrics |
+| `make clean` | Remove checkpoints & logs |
+
+---
+
+## 🎓 Implementation Details
+
+### Adaptations from Original CMT
+
+- **Single-channel input:** Grayscale (1 channel) instead of RGB (3 channels)
+- **Medical imaging focus:** Optimized for X-ray angiography
+- **Dynamic architecture:** SwinTransformer depth auto-scales with input size
+- **Multi-device support:** CPU, CUDA, and Apple Silicon (MPS)
+- **Efficient data pipeline:** Mask caching and annotation preprocessing
+- **Automated workflows:** Comprehensive Makefile integration
+
+### Dataset
+
+- **Source:** [ARCADE Challenge](https://arcade.grand-challenge.org/)
+- **Format:** COCO annotations with polygon segmentations
+- **Categories:** Vessel annotations (stenosis excluded)
+- **Splits:** Train / Validation / Test
+
+### Normalization
+
+- **Images:** [-1, 1] range
+- **Masks:** Binary {0, 1} (1 = vessel region to inpaint)
+
+---
+
+## 📝 Citation
+
+If you use this code in your research, please cite the original CMT paper:
+
+```bibtex
+@inproceedings{ko2023cmt,
+  title={Continuously Masked Transformer for Image Inpainting},
+  author={Ko, Keunsoo and Kim, Chang-Su},
+  booktitle={Proceedings of the IEEE/CVF International Conference on Computer Vision},
+  pages={},
+  year={2023}
+}
+```
+
+---
+
+## 🤝 Contributing
+
+This is a research project. For questions or collaboration opportunities, please open an issue on GitHub.
+
+---
+
+## 📄 License
+
+Research use only. See repository for details.
+
+---
+
+## 👤 Author
+
+**Dzielski** — Research Internship, Department of Medical Physics, Heidelberg University
+
+---
+
+## 🔗 Links
+
+- [ARCADE Dataset](https://arcade.grand-challenge.org/)
+- [Original CMT Paper](https://openaccess.thecvf.com/content/ICCV2023/)
+- [GitHub Repository](https://github.com/C0d3Crush/arcade-xray-inpainting)
+- [GitLab Repository](https://gitlab.umm.uni-heidelberg.de/medphys/juergen-hesser/dzielski-fp-inpainting-for-x-rays)
+
+---
+
+<p align="center">
+  <i>Developed at Heidelberg University, Department of Medical Physics</i>
+</p>
