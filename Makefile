@@ -29,7 +29,9 @@ install:
 	pip install -r requirements.txt
 
 smoke-test:
-	python src/train.py --smoke_test --smoke_size 20 --epochs 1 --batch_size 1 --device cpu
+	python src/train.py --smoke_test --smoke_size 20 --epochs 1 --batch_size 1 --device cpu \
+		--train_img $(TRAIN_IMG) --train_ann $(TRAIN_ANN) \
+		--val_img $(VAL_IMG) --val_ann $(VAL_ANN)
 
 cache-data:
 	@echo "Caching train masks..."
@@ -50,19 +52,19 @@ train:
 		--train_ann $(TRAIN_ANN) \
 		--val_img $(VAL_IMG) \
 		--val_ann $(VAL_ANN) \
-		--output_dir outputs/checkpoints \
+		--output_dir checkpoints \
 		--epochs $(EPOCHS) \
 		--batch_size $(BATCH_SIZE) \
 		--input_size $(INPUT_SIZE) \
 		--device $(DEVICE)
 
 inference:
-	@if [ ! -f outputs/checkpoints/best.pth ]; then \
-		echo "Error: outputs/checkpoints/best.pth not found. Train model first."; \
+	@if [ ! -f checkpoints/best.pth ]; then \
+		echo "Error: checkpoints/best.pth not found. Train model first."; \
 		exit 1; \
 	fi
 	python src/demo.py \
-		--ckpt outputs/checkpoints/best.pth \
+		--ckpt checkpoints/best.pth \
 		--img_path outputs/samples/test_img \
 		--mask_path outputs/samples/test_mask \
 		--output_path outputs/samples/results \
@@ -77,8 +79,8 @@ visualize:
 		--output outputs/samples/comparisons
 
 plot:
-	@if [ -f outputs/checkpoints/training_log.csv ]; then \
-		python scripts/plot_training.py outputs/checkpoints/training_log.csv; \
+	@if [ -f checkpoints/training_log.csv ]; then \
+		python scripts/plot_training.py checkpoints/training_log.csv; \
 	elif [ -f training_log.csv ]; then \
 		python scripts/plot_training.py training_log.csv; \
 	else \
@@ -87,5 +89,5 @@ plot:
 	fi
 
 clean:
-	rm -rf outputs/checkpoints/*.pth outputs/checkpoints/training_log.csv
+	rm -rf checkpoints/*.pth checkpoints/training_log.csv
 	@echo "Checkpoints and logs removed."

@@ -140,7 +140,7 @@ def validate_image(img_path, img_type="image"):
     return img
 
 
-def create_comparison(img_path, mask_path, result_path, zoom=True, target_size=64):
+def create_comparison(img_path, mask_path, result_path, zoom=True, target_size=64, crop_size=32):
     """Create side-by-side comparison: [Input | Mask | Result]"""
     try:
         # Validate and read all images with comprehensive error handling
@@ -166,6 +166,7 @@ def create_comparison(img_path, mask_path, result_path, zoom=True, target_size=6
             raise ValueError(f"Invalid input image dimensions: {h}x{w}")
         
         # Resize all images to same dimensions (input as reference)
+        # Use EXACT same interpolation as training/inference for fair comparison
         mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
         result = cv2.resize(result, (w, h), interpolation=cv2.INTER_LINEAR)
         
@@ -173,14 +174,15 @@ def create_comparison(img_path, mask_path, result_path, zoom=True, target_size=6
         print(f"Error loading images: {e}")
         return None
     
-    # Normalize both images to same range for fair comparison
-    # Remove redundant transformations that add rounding errors
-    img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-    result = cv2.normalize(result, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+    # Apply EXACT same normalization as training/inference for fair comparison
+    # Input: already 0-255 grayscale
+    # Result: should be 0-255 from demo.py output
+    # Ensure both are uint8 without changing pixel values
+    img = img.astype(np.uint8)
+    result = np.clip(result, 0, 255).astype(np.uint8)
     
     if zoom:
-        # Find optimal 16px region with robust vessel detection
-        crop_size = 16
+        # Find optimal region with robust vessel detection
         try:
             x1, y1, x2, y2 = find_optimal_vessel_region(mask, crop_size=crop_size)
             
@@ -217,10 +219,10 @@ def create_comparison(img_path, mask_path, result_path, zoom=True, target_size=6
             result = result[y1:y2, x1:x2]
             
     else:
-        # If not zooming, resize full image to target size
-        img = cv2.resize(img, (target_size, target_size), interpolation=cv2.INTER_CUBIC)
+        # If not zooming, resize full image to target size using training interpolation
+        img = cv2.resize(img, (target_size, target_size), interpolation=cv2.INTER_LINEAR)
         mask = cv2.resize(mask, (target_size, target_size), interpolation=cv2.INTER_NEAREST)
-        result = cv2.resize(result, (target_size, target_size), interpolation=cv2.INTER_CUBIC)
+        result = cv2.resize(result, (target_size, target_size), interpolation=cv2.INTER_LINEAR)
 
     # Convert mask to 3-channel for red overlay
     mask_vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
@@ -254,11 +256,11 @@ def create_comparison(img_path, mask_path, result_path, zoom=True, target_size=6
     
     # Labels removed for cleaner comparison view
 
-    # Add separator lines (1 pixel for 16x16 images)
+    # Add separator lines 
     sep_width = 1 if img_bgr.shape[0] <= 16 else max(2, img_bgr.shape[0] // 100)
     separator = np.ones((img_bgr.shape[0], sep_width, 3), dtype=np.uint8) * 255
 
-    # Concatenate horizontally
+    # Concatenate horizontally: Input | Mask | Result
     comparison = np.hstack([img_bgr, separator, mask_vis, separator, result_bgr])
 
     return comparison
@@ -278,8 +280,8 @@ def main():
                         help='Output directory for comparisons (default: samples/comparisons)')
     parser.add_argument('--no-zoom', action='store_true',
                         help='Disable zooming into mask regions (show full image)')
-    parser.add_argument('--crop-size', type=int, default=16,
-                        help='Size of cropped region when zooming (default: 16)')
+    parser.add_argument('--crop-size', type=int, default=32,
+                        help='Size of cropped region when zooming (default: 32)')
     parser.add_argument('--size', type=int, default=64,
                         help='Target size for each comparison panel (default: 64)')
     args = parser.parse_args()
@@ -321,7 +323,7 @@ def main():
 
         # Create comparison
         zoom_enabled = not args.no_zoom
-        comparison = create_comparison(img_path, mask_path, result_path, zoom=zoom_enabled, target_size=args.size)
+        comparison = create_comparison(img_path, mask_path, result_path, zoom=zoom_enabled, target_size=args.size, crop_size=args.crop_size)
         if comparison is None:
             print(f"Warning: Failed to create comparison for {filename}")
             continue
@@ -334,7 +336,7 @@ def main():
     print(f"\n✓ Created {success_count} comparison images in {args.output}/")
     print(f"\nComparison format: [Original | Mask | Inpainted]")
     if not args.no_zoom:
-        print(f"16x16 pixel crops (Total: 16x50)")
+        print(f"{args.crop_size}x{args.crop_size} pixel crops (Total: {args.crop_size}x{args.crop_size*3 + 4})")
     else:
         print(f"Each panel size: {args.size}x{args.size} (Total: {args.size}x{args.size*3 + 4})")
 

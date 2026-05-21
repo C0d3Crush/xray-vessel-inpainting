@@ -6,11 +6,11 @@
 
 ## TL;DR
 
-**AI-powered vessel inpainting for X-ray angiograms using Continuously Masked Transformers.** Reconstructs vessel-free backgrounds from coronary angiography images for medical data augmentation and synthetic dataset generation. Achieves ~38 dB PSNR on ARCADE dataset with enhanced metrics tracking.
+**AI-powered vessel inpainting for X-ray angiograms using Continuously Masked Transformers.** Reconstructs vessel-free backgrounds from coronary angiography images for medical data augmentation and synthetic dataset generation.
 
 ---
 
-## 🎯 Overview
+## Overview
 
 This project adapts the CMT (Continuously Masked Transformer) architecture for medical imaging, specifically targeting **vessel inpainting in coronary angiography X-rays**. Using the [ARCADE dataset](https://arcade.grand-challenge.org/), the model learns to reconstruct realistic vessel-free backgrounds, enabling:
 
@@ -22,18 +22,18 @@ This project adapts the CMT (Continuously Masked Transformer) architecture for m
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-- **🏥 Medical-optimized:** Grayscale X-ray adaptation of RGB transformer architecture
-- **📊 Enhanced metrics:** PSNR, SSIM, Wasserstein Distance, RMSE tracking
-- **🔧 Flexible training:** Dynamic input sizing (32-512px), multi-device support (CPU/GPU/MPS)
-- **⚡ Performance optimized:** Mask caching, annotation preprocessing, smart checkpointing
-- **📈 Advanced visualization:** Adaptive vessel detection, side-by-side comparisons
-- **🚀 Easy workflows:** Makefile automation for training, inference, and analysis
+- **Medical-optimized:** Grayscale X-ray adaptation of RGB transformer architecture
+- **Enhanced metrics:** PSNR, SSIM, Wasserstein Distance, RMSE tracking
+- **Flexible training:** Dynamic input sizing (32-512px), multi-device support (CPU/GPU/MPS)
+- **Performance optimized:** Mask caching, annotation preprocessing, smart checkpointing
+- **Advanced visualization:** Adaptive vessel detection, side-by-side comparisons
+- **Easy workflows:** Makefile automation for training, inference, and analysis
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -63,7 +63,7 @@ make visualize  # Creates Input|Mask|Result comparisons
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 **Two-stage inpainting pipeline:**
 
@@ -78,11 +78,11 @@ Input X-ray → CMT Encoder → Coarse Prediction → SwinTransformer Decoder �
 - **Stage 2:** SwinTransformer U-Net decoder with skip connections
 - **Loss:** Combined L1 (masked 6× + valid 1×) + SSIM (0.5×)
 
-**Performance:** ~38 dB PSNR | 0.85+ SSIM on ARCADE validation
+**Training metrics:** PSNR, SSIM, Wasserstein Distance, RMSE evaluation
 
 ---
 
-## 💻 Training
+## Training
 
 ### Quick Training
 ```bash
@@ -109,7 +109,7 @@ python src/train.py \
 
 ---
 
-## 🔍 Inference & Visualization
+## Inference & Visualization
 
 ### Generate Results
 ```bash
@@ -129,11 +129,11 @@ make visualize        # Create comparison visualizations
 make plot  # Generates training curves with all metrics
 ```
 
-Tracks: Training Loss | Validation PSNR | Validation SSIM | Wasserstein Distance | RMSE
+Displays: Training Loss | Validation PSNR | Validation SSIM | Wasserstein Distance | RMSE (when available)
 
 ---
 
-## 📊 Enhanced Metrics
+## Enhanced Metrics
 
 **New comprehensive evaluation:**
 - **PSNR** (Peak Signal-to-Noise Ratio) - Image quality
@@ -141,11 +141,11 @@ Tracks: Training Loss | Validation PSNR | Validation SSIM | Wasserstein Distance
 - **Wasserstein Distance** - Distribution similarity (Earth Mover's Distance)
 - **RMSE** (Root Mean Square Error) - Pixel-level accuracy
 
-All metrics logged to `outputs/checkpoints/training_log.csv` with automatic Google Drive backup.
+All metrics logged to `checkpoints/training_log.csv` with automatic Google Drive backup.
 
 ---
 
-## ⚡ Performance Optimizations
+## Performance Optimizations
 
 ### Data Pipeline
 ```bash
@@ -160,13 +160,14 @@ make cache-data  # 10× faster training via pre-computed masks
 
 ---
 
-## 🔧 Development
+## Development
 
 ### Project Structure
 ```
 src/              # Core training and inference code
 scripts/          # Utilities (visualization, preprocessing)  
-outputs/          # Checkpoints, samples, results
+checkpoints/      # Model weights and training logs
+outputs/samples/  # Test data and inference results
 data/arcade/      # ARCADE dataset
 Makefile          # Automated workflows
 ```
@@ -187,7 +188,7 @@ git pushall  # Push to GitHub + GitLab simultaneously
 
 ---
 
-## 📝 Citation
+## Citation
 
 ```bibtex
 @inproceedings{ko2023cmt,
@@ -200,7 +201,7 @@ git pushall  # Push to GitHub + GitLab simultaneously
 
 ---
 
-## 🔗 Links
+## Links
 
 - **[ARCADE Dataset](https://arcade.grand-challenge.org/)** - Coronary angiography challenge
 - **[Original CMT Paper](https://openaccess.thecvf.com/content/ICCV2023/)** - ICCV 2023
@@ -209,7 +210,3 @@ git pushall  # Push to GitHub + GitLab simultaneously
 
 ---
 
-<p align="center">
-<strong>Heidelberg University | Department of Medical Physics</strong><br>
-<i>Research Internship Project | 2024-2025</i>
-</p>
