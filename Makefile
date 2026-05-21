@@ -17,11 +17,15 @@ help:
 	@echo "Available targets:"
 	@echo "  make install         - Install dependencies"
 	@echo "  make smoke-test      - Quick pipeline verification (CPU, 1 epoch)"
+	@echo "  make smoke-test-background - Train with random background masks (2 epochs)"
 	@echo "  make cache-data      - Precompute masks & annotations (recommended)"
-	@echo "  make prepare-samples - Populate samples/ with test images from ARCADE"
+# Legacy prepare-samples removed
+	@echo "  make prepare-patch-samples - Create 64×64 patches for proper visualization"
+	@echo "  make prepare-background-samples - Create random background masks (vessel-free)"
 	@echo "  make train           - Train CMT inpainting model"
-	@echo "  make inference       - Run inference on samples/"
-	@echo "  make visualize       - Create side-by-side comparisons (Input|Mask|Result)"
+	@echo "  make inference       - Run patch-based inference on samples/"
+# Legacy inference-resize and visualize removed
+	@echo "  make training-comparison - Create enhanced comparison visualization"
 	@echo "  make plot            - Generate training plot from CSV"
 	@echo "  make clean           - Remove checkpoints and logs"
 	@echo ""
@@ -40,6 +44,21 @@ smoke-test:
 		--train_img $(TRAIN_IMG) --train_ann $(TRAIN_ANN) \
 		--val_img $(VAL_IMG) --val_ann $(VAL_ANN)
 
+smoke-test-background:
+	@echo "Creating background training masks for smoke test..."
+	python src/generate_background_masks.py \
+		--input-img $(TRAIN_IMG) \
+		--input-mask data/masks_cache/train \
+		--output-img data/smoke_bg_img \
+		--output-mask data/smoke_bg_mask \
+		--variations 2 --safety-margin 5
+	@echo "Training with random background masks (smoke test)..."
+	python src/train.py --smoke_test --smoke_size 40 --epochs 2 --patch_mode --input_size 64 --patches_per_image 4 --batch_size 2 --device cpu \
+		--train_img data/smoke_bg_img \
+		--train_mask data/smoke_bg_mask \
+		--val_img $(VAL_IMG) --val_ann $(VAL_ANN) \
+		--output_dir checkpoints_bg
+
 cache-data:
 	@echo "Caching train masks..."
 	python scripts/cache_masks.py --annotations $(TRAIN_ANN) --images $(TRAIN_IMG) --output $(DATA_DIR)/masks_cache/train
@@ -50,8 +69,16 @@ cache-data:
 	python scripts/preprocess_coco.py --annotations $(VAL_ANN) --output $(VAL_ANN:.json=.pkl)
 	@echo "✓ Data caching complete. Training will be faster now."
 
-prepare-samples:
-	python scripts/prepare_samples.py --annotations $(VAL_ANN) --images $(VAL_IMG) --num-samples 5 --overwrite --output-img outputs/samples/test_img --output-mask outputs/samples/test_mask
+# Legacy prepare-samples removed - use prepare-patch-samples or prepare-background-samples
+
+prepare-patch-samples:
+	python scripts/prepare_samples.py --annotations $(VAL_ANN) --images $(VAL_IMG) --num-samples 8 --overwrite --output-img outputs/samples/full_img --output-mask outputs/samples/full_mask
+	python src/extract_patch_samples.py --img-dir outputs/samples/full_img --mask-dir outputs/samples/full_mask --output-img outputs/samples/patch_img --output-mask outputs/samples/patch_mask --patch-size $(INPUT_SIZE) --min-vessel-ratio 0.05
+
+prepare-background-samples:
+	python scripts/prepare_samples.py --annotations $(VAL_ANN) --images $(VAL_IMG) --num-samples 5 --overwrite --output-img outputs/samples/full_img --output-mask outputs/samples/full_mask
+	python src/generate_background_masks.py --input-img outputs/samples/full_img --input-mask outputs/samples/full_mask --output-img outputs/samples/bg_img --output-mask outputs/samples/bg_mask --variations 3 --safety-margin 5
+	python src/extract_patch_samples.py --img-dir outputs/samples/bg_img --mask-dir outputs/samples/bg_mask --output-img outputs/samples/bg_patch_img --output-mask outputs/samples/bg_patch_mask --patch-size $(INPUT_SIZE) --min-vessel-ratio 0.05
 
 train:
 	python src/train.py \
@@ -70,20 +97,29 @@ inference:
 		echo "Error: checkpoints/best.pth not found. Train model first."; \
 		exit 1; \
 	fi
-	python src/demo.py \
+	python src/patch_inference_demo.py \
 		--ckpt checkpoints/best.pth \
-		--img_path outputs/samples/test_img \
-		--mask_path outputs/samples/test_mask \
-		--output_path outputs/samples/results \
+		--img_path outputs/samples/patch_img \
+		--mask_path outputs/samples/patch_mask \
+		--output_path outputs/samples/patch_results \
 		--input_size $(INPUT_SIZE) \
 		--device $(DEVICE)
 
-visualize:
-	python scripts/visualize_results.py \
-		--input outputs/samples/test_img \
-		--mask outputs/samples/test_mask \
-		--result outputs/samples/results \
-		--output outputs/samples/comparisons
+# Legacy inference-resize removed - use inference (patch-based)
+
+# Legacy visualize removed - use training-comparison
+
+training-comparison:
+	python scripts/create_training_comparison.py \
+		--patch-img outputs/samples/patch_img \
+		--patch-mask outputs/samples/patch_mask \
+		--patch-result outputs/samples/patch_results \
+		--output outputs/samples/patch_training_comparison.png \
+		--title "Patch Training Results (64×64 patches)" \
+		--images 104 162 66 9
+	@echo "Removing old comparison files..."
+	rm -f outputs/samples/comparisons/*.png
+	@echo "✓ 64×64 patch comparison created, old comparisons removed"
 
 plot:
 	@if [ -f checkpoints/training_log.csv ]; then \
