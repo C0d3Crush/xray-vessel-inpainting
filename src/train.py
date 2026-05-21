@@ -30,10 +30,14 @@ class ArcadeDataset(Dataset):
     """
     STENOSIS_CATEGORY_ID = 26
 
-    def __init__(self, img_dir, ann_path, image_size=256, mask_dir=None, random_masks=False, mask_padding=10):
-        self.img_dir    = img_dir
-        self.image_size = image_size
-        self.mask_dir   = mask_dir
+    def __init__(self, img_dir, ann_path, image_size=256, mask_dir=None, random_masks=False, mask_padding=10, patch_mode=False, patches_per_image=4):
+        self.img_dir      = img_dir
+        self.image_size   = image_size
+        self.mask_dir     = mask_dir
+        self.random_masks = random_masks
+        self.mask_padding = mask_padding
+        self.patch_mode   = patch_mode
+        self.patches_per_image = patches_per_image
 
         # Try loading from pickle cache first (10x faster)
         pkl_path = ann_path.replace('.json', '.pkl')
@@ -59,6 +63,8 @@ class ArcadeDataset(Dataset):
             ]
 
     def __len__(self):
+        if self.patch_mode:
+            return len(self.image_ids) * self.patches_per_image
         return len(self.image_ids)
 
     def _make_mask_from_annotations(self, image_id, W, H):
@@ -72,8 +78,111 @@ class ArcadeDataset(Dataset):
                     draw.polygon(xy, fill=255)
         return mask
 
+    def _generate_random_mask(self, base_mask, W, H):
+        """
+        Generate random mask around vessel regions with padding.
+        
+        Args:
+            base_mask: PIL Image with vessel regions (255 = vessel)
+            W, H: Original image dimensions
+            
+        Returns:
+            PIL Image with random mask (255 = regions to inpaint)
+        """
+        import random
+        
+        # Convert base mask to numpy for morphological operations
+        base_np = np.array(base_mask, dtype=np.uint8)
+        
+        # Apply dilation (padding) around vessel regions
+        kernel_size = max(3, self.mask_padding)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        dilated = cv2.dilate(base_np, kernel, iterations=1)
+        
+        # Create new mask starting with dilated vessels
+        random_mask = Image.fromarray(dilated, mode='L')
+        draw = ImageDraw.Draw(random_mask)
+        
+        # Add 2-5 random shapes for training diversity
+        num_shapes = random.randint(2, 5)
+        
+        for _ in range(num_shapes):
+            shape_type = random.choice(['ellipse', 'polygon'])
+            
+            if shape_type == 'ellipse':
+                # Random ellipse
+                center_x = random.randint(W // 4, 3 * W // 4)
+                center_y = random.randint(H // 4, 3 * H // 4)
+                radius_x = random.randint(W // 20, W // 8)
+                radius_y = random.randint(H // 20, H // 8)
+                
+                bbox = [center_x - radius_x, center_y - radius_y,
+                       center_x + radius_x, center_y + radius_y]
+                draw.ellipse(bbox, fill=255)
+                
+            else:
+                # Random irregular polygon (3-6 points)
+                num_points = random.randint(3, 6)
+                center_x = random.randint(W // 4, 3 * W // 4)
+                center_y = random.randint(H // 4, 3 * H // 4)
+                max_radius = min(W, H) // 10
+                
+                points = []
+                for i in range(num_points):
+                    angle = (2 * np.pi * i) / num_points + random.uniform(-0.5, 0.5)
+                    radius = random.randint(max_radius // 2, max_radius)
+                    x = center_x + int(radius * np.cos(angle))
+                    y = center_y + int(radius * np.sin(angle))
+                    points.extend([x, y])
+                
+                if len(points) >= 6:  # Minimum 3 points
+                    draw.polygon(points, fill=255)
+        
+        # Ensure mask doesn't cover too much of the image (limit to ~30%)
+        mask_np = np.array(random_mask, dtype=np.uint8)
+        coverage = np.sum(mask_np > 0) / (W * H)
+        
+        if coverage > 0.3:
+            # Reduce mask by erosion if too large
+            kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            mask_np = cv2.erode(mask_np, kernel_small, iterations=1)
+            random_mask = Image.fromarray(mask_np, mode='L')
+        
+        return random_mask
+
+    def _extract_random_patch(self, img, mask, patch_size):
+        """Extract a random patch from the image and mask."""
+        H, W = img.shape
+        
+        # Ensure patch fits within image
+        if H < patch_size or W < patch_size:
+            # Pad image if smaller than patch size
+            pad_h = max(0, patch_size - H)
+            pad_w = max(0, patch_size - W)
+            img = np.pad(img, ((0, pad_h), (0, pad_w)), mode='constant', constant_values=0)
+            mask = np.pad(mask, ((0, pad_h), (0, pad_w)), mode='constant', constant_values=0)
+            H, W = img.shape
+        
+        # Random top-left corner
+        max_y = H - patch_size
+        max_x = W - patch_size
+        y = np.random.randint(0, max_y + 1)
+        x = np.random.randint(0, max_x + 1)
+        
+        # Extract patch
+        img_patch = img[y:y+patch_size, x:x+patch_size]
+        mask_patch = mask[y:y+patch_size, x:x+patch_size]
+        
+        return img_patch, mask_patch
+
     def __getitem__(self, idx):
-        image_id = self.image_ids[idx]
+        if self.patch_mode:
+            # In patch mode, map idx to (image_idx, patch_idx)
+            image_idx = idx // self.patches_per_image
+            image_id = self.image_ids[image_idx]
+        else:
+            image_id = self.image_ids[idx]
+        
         info     = self.id_to_info[image_id]
         W, H     = info['width'], info['height']
 
@@ -91,19 +200,33 @@ class ArcadeDataset(Dataset):
                 raise FileNotFoundError(f"Mask not found: {mask_path}")
             mask_np = mask_img.astype(np.float32) / 255.0
         else:
-            mask_pil = self._make_mask_from_annotations(image_id, W, H)
-            mask_np  = np.array(mask_pil, dtype=np.float32) / 255.0
+            # Generate base mask from COCO annotations
+            base_mask_pil = self._make_mask_from_annotations(image_id, W, H)
+            
+            if self.random_masks:
+                # Generate random mask with padding and additional shapes
+                mask_pil = self._generate_random_mask(base_mask_pil, W, H)
+            else:
+                # Use original vessel mask
+                mask_pil = base_mask_pil
+            
+            mask_np = np.array(mask_pil, dtype=np.float32) / 255.0
 
-        # Resize
-        img  = cv2.resize(img,     (self.image_size, self.image_size),
-                          interpolation=cv2.INTER_LINEAR)
-        mask = cv2.resize(mask_np, (self.image_size, self.image_size),
-                          interpolation=cv2.INTER_NEAREST)
+        if self.patch_mode:
+            # Extract random patch instead of resizing
+            img_patch, mask_patch = self._extract_random_patch(img, mask_np, self.image_size)
+            img_norm = (img_patch.astype(np.float32) / 255.0) * 2.0 - 1.0
+        else:
+            # Original behavior: resize
+            img  = cv2.resize(img,     (self.image_size, self.image_size),
+                              interpolation=cv2.INTER_LINEAR)
+            mask_patch = cv2.resize(mask_np, (self.image_size, self.image_size),
+                              interpolation=cv2.INTER_NEAREST)
+            img_norm = (img.astype(np.float32) / 255.0) * 2.0 - 1.0
 
         # Normalise image to [-1, 1]
-        img_norm = (img.astype(np.float32) / 255.0) * 2.0 - 1.0
         img_t    = torch.from_numpy(img_norm).unsqueeze(0)
-        mask_t   = torch.from_numpy(mask.astype(np.float32)).unsqueeze(0)
+        mask_t   = torch.from_numpy(mask_patch.astype(np.float32)).unsqueeze(0)
         return img_t, mask_t
 
 
@@ -143,16 +266,18 @@ def ssim_loss(pred, target, window_size=11):
 
 class InpaintingLoss(nn.Module):
     """L1 + SSIM loss on masked region + L1 background consistency."""
-    def __init__(self, ssim_weight=0.5):
+    def __init__(self, ssim_weight=0.5, mask_weight=6.0, valid_weight=1.0):
         super().__init__()
         self.l1 = nn.L1Loss()
         self.ssim_weight = ssim_weight
+        self.mask_weight = mask_weight
+        self.valid_weight = valid_weight
 
     def forward(self, output, target, mask):
         loss_mask  = self.l1(output * mask,       target * mask)
         loss_valid = self.l1(output * (1 - mask), target * (1 - mask))
         loss_ssim  = ssim_loss(output, target)
-        return loss_mask * 6.0 + loss_valid + self.ssim_weight * loss_ssim
+        return loss_mask * self.mask_weight + loss_valid * self.valid_weight + self.ssim_weight * loss_ssim
 
 
 # ---------------------------------------------------------------------------
@@ -194,13 +319,13 @@ def rotate_checkpoints(output_dir, keep_top_k=3):
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="Train CMT on ARCADE grayscale X-rays")
-    parser.add_argument('--train_img',   default='arcade/syntax/train/images')
-    parser.add_argument('--train_ann',   default='arcade/syntax/train/annotations/train.json')
+    parser.add_argument('--train_img',   default='data/arcade/syntax/train/images')
+    parser.add_argument('--train_ann',   default='data/arcade/syntax/train/annotations/train.json')
     parser.add_argument('--train_mask',  default=None,
                         help='Optional: folder with precomputed train masks (e.g. data/masks_cache/train). '
                              'If None, masks are generated from COCO annotations.')
-    parser.add_argument('--val_img',     default='arcade/syntax/val/images')
-    parser.add_argument('--val_ann',     default='arcade/syntax/val/annotations/val.json')
+    parser.add_argument('--val_img',     default='data/arcade/syntax/val/images')
+    parser.add_argument('--val_ann',     default='data/arcade/syntax/val/annotations/val.json')
     parser.add_argument('--val_mask',    default=None,
                         help='Optional: folder with precomputed val masks.')
     parser.add_argument('--output_dir',  default='checkpoints')
@@ -221,6 +346,20 @@ def main():
                         help='Number of images to use in smoke test')
     parser.add_argument('--input_size',  type=int, default=256,
                         help='Input image size (power of 2, min 32)')
+    parser.add_argument('--random_masks', action='store_true',
+                        help='Generate random masks around vessel regions for diverse training')
+    parser.add_argument('--mask_padding', type=int, default=10,
+                        help='Padding size around vessel regions when using random masks')
+    parser.add_argument('--ssim_weight', type=float, default=0.5,
+                        help='Weight for SSIM loss component')
+    parser.add_argument('--mask_weight', type=float, default=6.0,
+                        help='Weight for L1 loss on masked regions')
+    parser.add_argument('--valid_weight', type=float, default=1.0,
+                        help='Weight for L1 loss on valid regions')
+    parser.add_argument('--patch_mode', action='store_true',
+                        help='Extract random patches instead of resizing entire image')
+    parser.add_argument('--patches_per_image', type=int, default=4,
+                        help='Number of patches to extract per image when using patch_mode')
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -228,12 +367,17 @@ def main():
 
     # ---- Datasets ----
     train_dataset = ArcadeDataset(args.train_img, args.train_ann, args.input_size,
-                                  mask_dir=args.train_mask)
+                                  mask_dir=args.train_mask, random_masks=args.random_masks,
+                                  mask_padding=args.mask_padding, patch_mode=args.patch_mode,
+                                  patches_per_image=args.patches_per_image)
     val_dataset   = ArcadeDataset(args.val_img,   args.val_ann,   args.input_size,
-                                  mask_dir=args.val_mask)
+                                  mask_dir=args.val_mask, patch_mode=args.patch_mode,
+                                  patches_per_image=args.patches_per_image)
 
     if args.train_mask:
         print(f"  Using precomputed train masks from: {args.train_mask}")
+    elif args.random_masks:
+        print(f"  Generating random masks around vessel regions (padding: {args.mask_padding}px)")
     else:
         print(f"  Generating train masks from COCO annotations")
 
@@ -247,7 +391,13 @@ def main():
     val_loader   = DataLoader(val_dataset,   batch_size=args.batch_size,
                               shuffle=False, num_workers=args.num_workers)
 
-    print(f"Train: {len(train_dataset)} images | Val: {len(val_dataset)} images")
+    if args.patch_mode:
+        base_train_imgs = len(train_dataset.image_ids)
+        base_val_imgs = len(val_dataset.image_ids)
+        print(f"Patch mode enabled: {args.patches_per_image} patches per image")
+        print(f"Train: {base_train_imgs} images → {len(train_dataset)} patches | Val: {base_val_imgs} images → {len(val_dataset)} patches")
+    else:
+        print(f"Train: {len(train_dataset)} images | Val: {len(val_dataset)} images")
 
     # ---- Model ----
     model = Inpaint(input_size=args.input_size).to(device)
@@ -259,7 +409,9 @@ def main():
     # ---- Optimiser & Loss ----
     optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999))
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
-    criterion = InpaintingLoss().to(device)
+    criterion = InpaintingLoss(ssim_weight=args.ssim_weight, 
+                                mask_weight=args.mask_weight,
+                                valid_weight=args.valid_weight).to(device)
 
     # ---- Training loop ----
     best_val_psnr = 0.0
