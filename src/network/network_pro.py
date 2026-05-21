@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch
-from network.vit import ViT
-from network.refine import Refine
+from .vit import ViT
+from .refine import Refine
 
 class Inpaint(nn.Module):
     def __init__(self, input_size=256, patch_size=None, depth=15, heads=16):

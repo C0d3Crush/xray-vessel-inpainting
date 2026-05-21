@@ -34,3 +34,9 @@ torchvision==0.17.2
 tqdm==4.67.3
 typer==0.23.2
 typing_extensions==4.15.0
+
+# Testing dependencies
+pytest==7.4.0
+pytest-cov==4.1.0
+pytest-mock==3.11.1
+pytest-xdist==3.3.1

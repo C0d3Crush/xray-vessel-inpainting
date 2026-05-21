@@ -1,4 +1,4 @@
-.PHONY: help install smoke-test prep-phase1 phase1 train inference clean
+.PHONY: help install smoke-test prep-phase1 phase1 train inference clean test test-unit test-integration test-coverage test-fast
 
 # Default ARCADE paths
 TRAIN_IMG = data/arcade/syntax/train/images
@@ -24,6 +24,13 @@ help:
 	@echo "  make visualize       - Create side-by-side comparisons (Input|Mask|Result)"
 	@echo "  make plot            - Generate training plot from CSV"
 	@echo "  make clean           - Remove checkpoints and logs"
+	@echo ""
+	@echo "Testing targets:"
+	@echo "  make test            - Run full test suite"
+	@echo "  make test-unit       - Run unit tests only"
+	@echo "  make test-integration- Run integration tests only"
+	@echo "  make test-fast       - Run fast tests (exclude slow tests)"
+	@echo "  make test-coverage   - Run tests with coverage report"
 
 install:
 	pip install -r requirements.txt
@@ -91,3 +98,28 @@ plot:
 clean:
 	rm -rf checkpoints/*.pth checkpoints/training_log.csv
 	@echo "Checkpoints and logs removed."
+
+# Testing targets
+test:
+	pytest tests/ -v
+
+test-unit:
+	pytest tests/unit/ -v -m "unit or not integration"
+
+test-integration:
+	pytest tests/integration/ -v -m "integration"
+
+test-fast:
+	pytest tests/ -v -m "not slow and not gpu and not data"
+
+test-coverage:
+	pytest tests/ --cov=src --cov-report=html --cov-report=term-missing -v
+
+test-models:
+	pytest tests/unit/test_models.py -v
+
+test-dataset:
+	pytest tests/unit/test_dataset.py -v
+
+test-metrics:
+	pytest tests/unit/test_losses_metrics.py -v

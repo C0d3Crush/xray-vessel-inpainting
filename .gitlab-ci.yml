@@ -1,5 +1,6 @@
 stages:
   - test
+  - integration
 
 variables:
   AUTO_DEVOPS_DISABLED: "true"
@@ -9,12 +10,64 @@ cache:
   paths:
     - .cache/pip
 
-smoke_test:
+# Unit Tests
+unit_tests:
   stage: test
   image: python:3.11-slim
   before_script:
+    - apt-get update && apt-get install -y libgl1-mesa-glx libglib2.0-0
     - pip install --upgrade pip
     - pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cpu
     - pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
   script:
-    - python train.py --smoke_test --smoke_size 20 --epochs 1 --batch_size 1 --device cpu
+    - make test-unit
+  artifacts:
+    when: always
+    reports:
+      junit: tests/test-results.xml
+    paths:
+      - tests/test-results.xml
+    expire_in: 1 week
+
+# Fast Tests (no slow/gpu/data tests)
+fast_tests:
+  stage: test
+  image: python:3.11-slim
+  before_script:
+    - apt-get update && apt-get install -y libgl1-mesa-glx libglib2.0-0
+    - pip install --upgrade pip
+    - pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cpu
+    - pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+  script:
+    - make test-fast
+
+# Smoke Test (Training Pipeline)
+smoke_test:
+  stage: integration
+  image: python:3.11-slim
+  before_script:
+    - apt-get update && apt-get install -y libgl1-mesa-glx libglib2.0-0
+    - pip install --upgrade pip
+    - pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cpu
+    - pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+  script:
+    - make smoke-test
+  only:
+    - main
+    - sync-main
+
+# Integration Tests (only on main branch)
+integration_tests:
+  stage: integration
+  image: python:3.11-slim
+  before_script:
+    - apt-get update && apt-get install -y libgl1-mesa-glx libglib2.0-0
+    - pip install --upgrade pip
+    - pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cpu
+    - pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+  script:
+    - make test-integration
+  only:
+    - main
+    - sync-main
+  allow_failure: true  # Allow to fail since they require more resources
