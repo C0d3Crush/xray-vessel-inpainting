@@ -159,3 +159,15 @@ test-dataset:
 
 test-metrics:
 	pytest tests/unit/test_losses_metrics.py -v
+
+test-background:
+	pytest tests/unit/test_background_masks.py -v
+
+test-workflow:
+	pytest tests/integration/test_workflow.py -v
+
+test-robustness:
+	pytest tests/unit/test_training_robustness.py -v
+
+test-all-new:
+	pytest tests/unit/test_background_masks.py tests/unit/test_training_robustness.py tests/integration/test_workflow.py -v
