@@ -137,3 +137,46 @@ def wasserstein_distance_2d(img1, img2):
     # Use scipy's 1D Wasserstein on flattened distributions
     return wasserstein_distance(img1.flatten(), img2.flatten())
 
+
+def calculate_kl_divergence(img1, img2, bins=256, epsilon=1e-10):
+    """
+    Calculate Kullback-Leibler divergence between two images using histograms.
+    
+    KL divergence measures how different two probability distributions are.
+    For medical inpainting, this shows how well the generated tissue matches 
+    the original intensity distribution.
+    
+    Args:
+        img1, img2: Input images (numpy arrays or torch tensors)
+        bins: Number of histogram bins (default 256 for 8-bit images)
+        epsilon: Small value to avoid log(0)
+    
+    Returns:
+        float: KL divergence D_KL(P||Q) where P=img1, Q=img2 (lower is better)
+    """
+    if isinstance(img1, torch.Tensor):
+        img1 = img1.detach().cpu().numpy()
+    if isinstance(img2, torch.Tensor):
+        img2 = img2.detach().cpu().numpy()
+    
+    # Normalize images to [0, 1] range for consistent histograms
+    img1_norm = (img1 - img1.min()) / (img1.max() - img1.min() + epsilon)
+    img2_norm = (img2 - img2.min()) / (img2.max() - img2.min() + epsilon)
+    
+    # Calculate histograms (probability distributions)
+    hist1, _ = np.histogram(img1_norm.flatten(), bins=bins, range=(0, 1), density=True)
+    hist2, _ = np.histogram(img2_norm.flatten(), bins=bins, range=(0, 1), density=True)
+    
+    # Normalize to probability distributions
+    hist1 = hist1 / np.sum(hist1)
+    hist2 = hist2 / np.sum(hist2)
+    
+    # Add epsilon to avoid log(0)
+    hist1 = hist1 + epsilon
+    hist2 = hist2 + epsilon
+    
+    # Calculate KL divergence: D_KL(P||Q) = sum(P * log(P/Q))
+    kl_div = np.sum(hist1 * np.log(hist1 / hist2))
+    
+    return float(kl_div)
+

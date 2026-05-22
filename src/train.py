@@ -10,7 +10,7 @@ import cv2
 from collections import defaultdict
 from tqdm import tqdm
 from network.network_pro import Inpaint
-from utils import load_checkpoint, psnr, rmse, wasserstein_distance_2d
+from utils import load_checkpoint, psnr, rmse, wasserstein_distance_2d, calculate_kl_divergence
 from skimage.metrics import structural_similarity as ssim_fn
 import random
 from scipy.ndimage import binary_dilation
@@ -647,13 +647,13 @@ def main():
     # Enhanced logging for analysis
     analysis_log_path = os.path.join(args.output_dir, 'training_analysis.csv')
     with open(log_path, 'w') as f:
-        f.write('epoch,train_loss,val_psnr,val_ssim,val_wasserstein,val_rmse\n')
+        f.write('epoch,train_loss,val_loss,val_l1_loss,val_ssim_loss,val_psnr,val_ssim,val_wasserstein,val_rmse,val_kl_divergence\n')
     with open(analysis_log_path, 'w') as f:
-        f.write('epoch,train_loss,l1_loss,ssim_loss,loss_change,psnr_realistic,learning_pattern\n')
+        f.write('epoch,train_loss,val_loss,l1_loss,ssim_loss,loss_change,psnr_realistic,learning_pattern\n')
     
     if drive_log_path:
         with open(drive_log_path, 'w') as f:
-            f.write('epoch,train_loss,val_psnr,val_ssim,val_wasserstein,val_rmse\n')
+            f.write('epoch,train_loss,val_loss,val_l1_loss,val_ssim_loss,val_psnr,val_ssim,val_wasserstein,val_rmse,val_kl_divergence\n')
     
     # Track training behavior
     prev_train_loss = None
@@ -685,14 +685,25 @@ def main():
 
         # -- Validate --
         model.eval()
+        val_loss = 0.0
+        val_l1_loss = 0.0
+        val_ssim_loss = 0.0
         val_psnr = 0.0
         val_ssim = 0.0
         val_wasserstein = 0.0
         val_rmse = 0.0
+        val_kl_divergence = 0.0
         with torch.no_grad():
             for img, mask in tqdm(val_loader, desc=f"Epoch {epoch}/{args.epochs} [val]"):
                 img, mask = img.to(device), mask.to(device)
                 output = model(img, mask)
+                
+                # Calculate validation loss
+                loss, loss_components = criterion(output, img, mask)
+                val_loss += loss.item()
+                val_l1_loss += loss_components['l1_loss']
+                val_ssim_loss += loss_components['ssim_loss']
+                
                 output = torch.clip(output, -1.0, 1.0)
                 out_np = (output[:, 0].cpu().numpy() * 0.5 + 0.5) * 255.0
                 gt_np  = (img[:, 0].cpu().numpy()    * 0.5 + 0.5) * 255.0
@@ -701,19 +712,25 @@ def main():
                     val_ssim += ssim_fn(o, g, data_range=255.0)
                     val_wasserstein += wasserstein_distance_2d(o, g)
                     val_rmse += rmse(o, g)
+                    val_kl_divergence += calculate_kl_divergence(o, g)
+        
+        val_loss /= len(val_loader)
+        val_l1_loss /= len(val_loader)
+        val_ssim_loss /= len(val_loader)
         val_psnr /= len(val_dataset)
         val_ssim /= len(val_dataset)
         val_wasserstein /= len(val_dataset)
         val_rmse /= len(val_dataset)
+        val_kl_divergence /= len(val_dataset)
 
         scheduler.step()
-        print(f"Epoch {epoch:03d} | train_loss={train_loss:.4f} | val_psnr={val_psnr:.2f} dB | val_ssim={val_ssim:.4f} | val_wasserstein={val_wasserstein:.2f} | val_rmse={val_rmse:.2f}")
+        print(f"Epoch {epoch:03d} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | val_psnr={val_psnr:.2f} dB | val_ssim={val_ssim:.4f} | val_wasserstein={val_wasserstein:.2f} | val_rmse={val_rmse:.2f} | val_kl={val_kl_divergence:.3f}")
 
         with open(log_path, 'a') as f:
-            f.write(f"{epoch},{train_loss:.4f},{val_psnr:.2f},{val_ssim:.4f},{val_wasserstein:.4f},{val_rmse:.4f}\n")
+            f.write(f"{epoch},{train_loss:.4f},{val_loss:.4f},{val_l1_loss:.4f},{val_ssim_loss:.4f},{val_psnr:.2f},{val_ssim:.4f},{val_wasserstein:.4f},{val_rmse:.4f},{val_kl_divergence:.4f}\n")
         if drive_log_path:
             with open(drive_log_path, 'a') as f:
-                f.write(f"{epoch},{train_loss:.4f},{val_psnr:.2f},{val_ssim:.4f},{val_wasserstein:.4f},{val_rmse:.4f}\n")
+                f.write(f"{epoch},{train_loss:.4f},{val_loss:.4f},{val_l1_loss:.4f},{val_ssim_loss:.4f},{val_psnr:.2f},{val_ssim:.4f},{val_wasserstein:.4f},{val_rmse:.4f},{val_kl_divergence:.4f}\n")
 
         # Enhanced analysis logging
         loss_change = 0.0 if prev_train_loss is None else prev_train_loss - train_loss
@@ -729,7 +746,7 @@ def main():
             learning_pattern = "normal"
         
         with open(analysis_log_path, 'a') as f:
-            f.write(f"{epoch},{train_loss:.6f},{avg_l1_loss:.6f},{avg_ssim_loss:.6f},{loss_change:.6f},{psnr_realistic},{learning_pattern}\n")
+            f.write(f"{epoch},{train_loss:.6f},{val_loss:.6f},{avg_l1_loss:.6f},{avg_ssim_loss:.6f},{loss_change:.6f},{psnr_realistic},{learning_pattern}\n")
         
         prev_train_loss = train_loss
 
