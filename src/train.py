@@ -12,6 +12,8 @@ from tqdm import tqdm
 from network.network_pro import Inpaint
 from utils import load_checkpoint, psnr, rmse, wasserstein_distance_2d
 from skimage.metrics import structural_similarity as ssim_fn
+import random
+from scipy.ndimage import binary_dilation
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -30,7 +32,7 @@ class ArcadeDataset(Dataset):
     """
     STENOSIS_CATEGORY_ID = 26
 
-    def __init__(self, img_dir, ann_path, image_size=256, mask_dir=None, random_masks=False, mask_padding=10, patch_mode=False, patches_per_image=4):
+    def __init__(self, img_dir, ann_path, image_size=256, mask_dir=None, random_masks=False, mask_padding=10, patch_mode=False, patches_per_image=4, online_background_masks=False, safety_margin=5, foreground_prob=0.75):
         self.img_dir      = img_dir
         self.image_size   = image_size
         self.mask_dir     = mask_dir
@@ -38,6 +40,9 @@ class ArcadeDataset(Dataset):
         self.mask_padding = mask_padding
         self.patch_mode   = patch_mode
         self.patches_per_image = patches_per_image
+        self.online_background_masks = online_background_masks
+        self.safety_margin = safety_margin
+        self.foreground_prob = foreground_prob
 
         # Try loading from pickle cache first (10x faster)
         pkl_path = ann_path.replace('.json', '.pkl')
@@ -62,8 +67,8 @@ class ArcadeDataset(Dataset):
                 if self.anns_by_image[img_id]
             ]
         
-        # Filter image_ids to only include those with existing files
-        if self.mask_dir:
+        # Filter image_ids to only include those with existing files (skip for online generation)
+        if self.mask_dir and not self.online_background_masks:
             # For background mask training, only include images with successfully generated files
             self.image_ids = self._filter_existing_files()
 
@@ -124,6 +129,112 @@ class ArcadeDataset(Dataset):
         
         # Fallback to original path (will fail with FileNotFoundError)
         return str(exact_path)
+
+    def _generate_online_background_mask(self, img_shape, vessel_mask, num_shapes=3):
+        """Generate random background mask on-the-fly during training."""
+        h, w = img_shape
+        
+        # Create vessel exclusion mask
+        vessel_binary = (vessel_mask > 127).astype(np.uint8)
+        struct = np.ones((2*self.safety_margin+1, 2*self.safety_margin+1), dtype=np.uint8)
+        exclusion_mask = binary_dilation(vessel_binary, structure=struct).astype(np.uint8)
+        
+        # Generate combined background mask
+        combined_mask = np.zeros((h, w), dtype=np.uint8)
+        successful_shapes = 0
+        
+        for _ in range(num_shapes):
+            shape_type = random.choice(['circle', 'rectangle', 'blob'])
+            
+            if shape_type == 'circle':
+                mask, success = self._generate_random_circle(img_shape, exclusion_mask)
+            elif shape_type == 'rectangle':
+                mask, success = self._generate_random_rectangle(img_shape, exclusion_mask)
+            else:  # blob
+                mask, success = self._generate_random_blob(img_shape, exclusion_mask)
+            
+            if success:
+                combined_mask = np.maximum(combined_mask, mask)
+                successful_shapes += 1
+        
+        return combined_mask, successful_shapes
+
+    def _generate_random_circle(self, img_shape, exclusion_mask, min_radius=8, max_radius=25):
+        """Generate random circle in vessel-free region."""
+        h, w = img_shape
+        mask = np.zeros((h, w), dtype=np.uint8)
+        
+        for _ in range(50):  # Max attempts
+            radius = random.randint(min_radius, max_radius)
+            center_x = random.randint(radius, w - radius)
+            center_y = random.randint(radius, h - radius)
+            
+            temp_mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.circle(temp_mask, (center_x, center_y), radius, 255, -1)
+            
+            overlap = np.sum((temp_mask > 0) & (exclusion_mask > 0))
+            circle_area = np.sum(temp_mask > 0)
+            
+            if overlap / circle_area < 0.1:  # Less than 10% overlap
+                cv2.circle(mask, (center_x, center_y), radius, 255, -1)
+                return mask, True
+        
+        return mask, False
+
+    def _generate_random_rectangle(self, img_shape, exclusion_mask, min_size=10, max_size=30):
+        """Generate random rectangle in vessel-free region."""
+        h, w = img_shape
+        mask = np.zeros((h, w), dtype=np.uint8)
+        
+        for _ in range(50):  # Max attempts
+            width = random.randint(min_size, max_size)
+            height = random.randint(min_size, max_size)
+            x = random.randint(0, w - width)
+            y = random.randint(0, h - height)
+            
+            temp_mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.rectangle(temp_mask, (x, y), (x + width, y + height), 255, -1)
+            
+            overlap = np.sum((temp_mask > 0) & (exclusion_mask > 0))
+            rect_area = np.sum(temp_mask > 0)
+            
+            if overlap / rect_area < 0.1:  # Less than 10% overlap
+                cv2.rectangle(mask, (x, y), (x + width, y + height), 255, -1)
+                return mask, True
+        
+        return mask, False
+
+    def _generate_random_blob(self, img_shape, exclusion_mask, min_radius=15, max_radius=30):
+        """Generate random irregular blob in vessel-free region."""
+        h, w = img_shape
+        mask = np.zeros((h, w), dtype=np.uint8)
+        
+        for _ in range(50):  # Max attempts
+            center_x = random.randint(max_radius, w - max_radius)
+            center_y = random.randint(max_radius, h - max_radius)
+            
+            # Generate random polygon points around center
+            num_points = random.randint(5, 8)
+            points = []
+            for i in range(num_points):
+                angle = (2 * np.pi * i) / num_points + random.uniform(-0.3, 0.3)
+                radius = random.uniform(max_radius * 0.5, max_radius)
+                x = int(center_x + radius * np.cos(angle))
+                y = int(center_y + radius * np.sin(angle))
+                points.append([x, y])
+            
+            temp_mask = np.zeros((h, w), dtype=np.uint8)
+            points_array = np.array(points, dtype=np.int32)
+            cv2.fillPoly(temp_mask, [points_array], 255)
+            
+            overlap = np.sum((temp_mask > 0) & (exclusion_mask > 0))
+            blob_area = np.sum(temp_mask > 0)
+            
+            if blob_area > 0 and overlap / blob_area < 0.1:
+                cv2.fillPoly(mask, [points_array], 255)
+                return mask, True
+        
+        return mask, False
 
     def _make_mask_from_annotations(self, image_id, W, H):
         """Rasterise vessel polygons into a binary mask (255 = vessel)."""
@@ -208,8 +319,8 @@ class ArcadeDataset(Dataset):
         
         return random_mask
 
-    def _extract_random_patch(self, img, mask, patch_size):
-        """Extract a random patch from the image and mask."""
+    def _extract_random_patch(self, img, mask, patch_size, min_coverage=0.01, max_retries=5):
+        """Extract a patch with foreground bias to ensure mask coverage."""
         H, W = img.shape
         
         # Ensure patch fits within image
@@ -221,13 +332,49 @@ class ArcadeDataset(Dataset):
             mask = np.pad(mask, ((0, pad_h), (0, pad_w)), mode='constant', constant_values=0)
             H, W = img.shape
         
-        # Random top-left corner
         max_y = H - patch_size
         max_x = W - patch_size
+        
+        # Check if we should use foreground-biased sampling
+        foreground_pixels = np.where(mask > 0)
+        use_foreground_bias = (
+            np.random.random() < self.foreground_prob and 
+            len(foreground_pixels[0]) > 0
+        )
+        
+        if use_foreground_bias:
+            # Try foreground-biased sampling with retries
+            for retry in range(max_retries):
+                # Pick a random foreground pixel
+                idx = np.random.randint(len(foreground_pixels[0]))
+                center_y, center_x = foreground_pixels[0][idx], foreground_pixels[1][idx]
+                
+                # Add jitter around the center (±patch_size//4)
+                jitter_range = patch_size // 4
+                jitter_y = np.random.randint(-jitter_range, jitter_range + 1)
+                jitter_x = np.random.randint(-jitter_range, jitter_range + 1)
+                
+                # Calculate top-left corner (center - patch_size//2 + jitter)
+                y = center_y - patch_size // 2 + jitter_y
+                x = center_x - patch_size // 2 + jitter_x
+                
+                # Clamp to valid range
+                y = np.clip(y, 0, max_y)
+                x = np.clip(x, 0, max_x)
+                
+                # Extract patch
+                img_patch = img[y:y+patch_size, x:x+patch_size]
+                mask_patch = mask[y:y+patch_size, x:x+patch_size]
+                
+                # Check coverage
+                coverage = np.sum(mask_patch > 0) / (patch_size * patch_size)
+                if coverage >= min_coverage or retry == max_retries - 1:
+                    return img_patch, mask_patch
+        
+        # Fallback: random sampling (either by choice or if foreground bias failed)
         y = np.random.randint(0, max_y + 1)
         x = np.random.randint(0, max_x + 1)
         
-        # Extract patch
         img_patch = img[y:y+patch_size, x:x+patch_size]
         mask_patch = mask[y:y+patch_size, x:x+patch_size]
         
@@ -427,6 +574,8 @@ def main():
                         help='Extract random patches instead of resizing entire image')
     parser.add_argument('--patches_per_image', type=int, default=4,
                         help='Number of patches to extract per image when using patch_mode')
+    parser.add_argument('--foreground_prob', type=float, default=0.75,
+                        help='Probability of biasing patch sampling toward foreground (mask) pixels')
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -436,10 +585,12 @@ def main():
     train_dataset = ArcadeDataset(args.train_img, args.train_ann, args.input_size,
                                   mask_dir=args.train_mask, random_masks=args.random_masks,
                                   mask_padding=args.mask_padding, patch_mode=args.patch_mode,
-                                  patches_per_image=args.patches_per_image)
+                                  patches_per_image=args.patches_per_image,
+                                  foreground_prob=args.foreground_prob)
     val_dataset   = ArcadeDataset(args.val_img,   args.val_ann,   args.input_size,
                                   mask_dir=args.val_mask, patch_mode=args.patch_mode,
-                                  patches_per_image=args.patches_per_image)
+                                  patches_per_image=args.patches_per_image,
+                                  foreground_prob=args.foreground_prob)
 
     if args.train_mask:
         print(f"  Using precomputed train masks from: {args.train_mask}")
