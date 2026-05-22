@@ -8,6 +8,7 @@ venv/
 *.pth
 *.pth.tar
 checkpoints/
+checkpoints_*/
 best.pth
 
 # Dataset
