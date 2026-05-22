@@ -335,7 +335,16 @@ class InpaintingLoss(nn.Module):
         loss_mask  = self.l1(output * mask,       target * mask)
         loss_valid = self.l1(output * (1 - mask), target * (1 - mask))
         loss_ssim  = ssim_loss(output, target)
-        return loss_mask * self.mask_weight + loss_valid * self.valid_weight + self.ssim_weight * loss_ssim
+        
+        total_loss = loss_mask * self.mask_weight + loss_valid * self.valid_weight + self.ssim_weight * loss_ssim
+        
+        # Return total loss and components for analysis
+        return total_loss, {
+            'l1_loss': (loss_mask * self.mask_weight + loss_valid * self.valid_weight).item(),
+            'ssim_loss': (self.ssim_weight * loss_ssim).item(),
+            'mask_loss': loss_mask.item(),
+            'valid_loss': loss_valid.item()
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -483,27 +492,45 @@ def main():
         print(f"  Drive mounted: checkpoints will be mirrored to {drive_ckpt_dir}")
 
     drive_log_path = os.path.join(drive_ckpt_dir, 'training_log.csv') if use_drive else None
+    
+    # Enhanced logging for analysis
+    analysis_log_path = os.path.join(args.output_dir, 'training_analysis.csv')
     with open(log_path, 'w') as f:
         f.write('epoch,train_loss,val_psnr,val_ssim,val_wasserstein,val_rmse\n')
+    with open(analysis_log_path, 'w') as f:
+        f.write('epoch,train_loss,l1_loss,ssim_loss,loss_change,psnr_realistic,learning_pattern\n')
+    
     if drive_log_path:
         with open(drive_log_path, 'w') as f:
             f.write('epoch,train_loss,val_psnr,val_ssim,val_wasserstein,val_rmse\n')
+    
+    # Track training behavior
+    prev_train_loss = None
 
     for epoch in range(1, args.epochs + 1):
         # -- Train --
         model.train()
         train_loss = 0.0
+        total_l1_loss = 0.0
+        total_ssim_loss = 0.0
         prog = tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs} [train]")
+        
         for img, mask in prog:
             img, mask = img.to(device), mask.to(device)
             optimizer.zero_grad()
             output = model(img, mask)
-            loss   = criterion(output, img, mask)
+            loss, loss_components = criterion(output, img, mask)
             loss.backward()
             optimizer.step()
+            
             train_loss += loss.item()
+            total_l1_loss += loss_components['l1_loss']
+            total_ssim_loss += loss_components['ssim_loss']
             prog.set_postfix(loss=f"{loss.item():.4f}")
+            
         train_loss /= len(train_loader)
+        avg_l1_loss = total_l1_loss / len(train_loader)
+        avg_ssim_loss = total_ssim_loss / len(train_loader)
 
         # -- Validate --
         model.eval()
@@ -536,6 +563,24 @@ def main():
         if drive_log_path:
             with open(drive_log_path, 'a') as f:
                 f.write(f"{epoch},{train_loss:.4f},{val_psnr:.2f},{val_ssim:.4f},{val_wasserstein:.4f},{val_rmse:.4f}\n")
+
+        # Enhanced analysis logging
+        loss_change = 0.0 if prev_train_loss is None else prev_train_loss - train_loss
+        psnr_realistic = "realistic" if 30 <= val_psnr <= 45 else ("too_high" if val_psnr > 70 else "too_low")
+        
+        if epoch == 1:
+            learning_pattern = "initial"
+        elif loss_change > 0.01:
+            learning_pattern = "good_learning"
+        elif loss_change < 0.001:
+            learning_pattern = "slow_learning"
+        else:
+            learning_pattern = "normal"
+        
+        with open(analysis_log_path, 'a') as f:
+            f.write(f"{epoch},{train_loss:.6f},{avg_l1_loss:.6f},{avg_ssim_loss:.6f},{loss_change:.6f},{psnr_realistic},{learning_pattern}\n")
+        
+        prev_train_loss = train_loss
 
         if val_psnr > best_val_psnr:
             best_val_psnr = val_psnr
