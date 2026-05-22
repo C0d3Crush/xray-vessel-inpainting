@@ -61,11 +61,69 @@ class ArcadeDataset(Dataset):
                 img_id for img_id in self.id_to_info
                 if self.anns_by_image[img_id]
             ]
+        
+        # Filter image_ids to only include those with existing files
+        if self.mask_dir:
+            # For background mask training, only include images with successfully generated files
+            self.image_ids = self._filter_existing_files()
 
     def __len__(self):
         if self.patch_mode:
             return len(self.image_ids) * self.patches_per_image
         return len(self.image_ids)
+
+    def _filter_existing_files(self):
+        """Filter image_ids to only include those with existing background files."""
+        from pathlib import Path
+        
+        filtered_ids = []
+        img_dir = Path(self.img_dir)
+        mask_dir = Path(self.mask_dir)
+        original_count = len(self.image_ids)
+        
+        for img_id in self.image_ids:
+            img_info = self.id_to_info[img_id]
+            base_name = img_info['file_name'].replace('.png', '')
+            
+            # Check if background files exist (any variation)
+            # Background files have format: {base_name}_bg_{XX}.png
+            bg_pattern = f"{base_name}_bg_"
+            
+            has_bg_img = any(bg_pattern in f.name for f in img_dir.glob("*.png"))
+            has_bg_mask = any(bg_pattern in f.name for f in mask_dir.glob("*.png"))
+            
+            if has_bg_img and has_bg_mask:
+                filtered_ids.append(img_id)
+        
+        filtered_count = len(filtered_ids)
+        if filtered_count < original_count:
+            print(f"⚠️  Filtered dataset: {original_count} → {filtered_count} images")
+            print(f"   Skipped {original_count - filtered_count} images without background files")
+            
+        return filtered_ids
+
+    def _get_actual_file_path(self, directory, original_filename):
+        """Get actual file path, handling background file naming."""
+        from pathlib import Path
+        
+        dir_path = Path(directory)
+        base_name = original_filename.replace('.png', '')
+        
+        # First try exact filename (for standard training)
+        exact_path = dir_path / original_filename
+        if exact_path.exists():
+            return str(exact_path)
+        
+        # Then try background file pattern (for background training)
+        bg_pattern = f"{base_name}_bg_"
+        bg_files = [f for f in dir_path.glob("*.png") if bg_pattern in f.name]
+        
+        if bg_files:
+            # Use first available background variation
+            return str(bg_files[0])
+        
+        # Fallback to original path (will fail with FileNotFoundError)
+        return str(exact_path)
 
     def _make_mask_from_annotations(self, image_id, W, H):
         """Rasterise vessel polygons into a binary mask (255 = vessel)."""
@@ -186,15 +244,15 @@ class ArcadeDataset(Dataset):
         info     = self.id_to_info[image_id]
         W, H     = info['width'], info['height']
 
-        # Load image
-        img_path = os.path.join(self.img_dir, info['file_name'])
+        # Load image (handle background file naming)
+        img_path = self._get_actual_file_path(self.img_dir, info['file_name'])
         img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
         if img is None:
             raise FileNotFoundError(f"Image not found: {img_path}")
 
         # Load or generate mask
         if self.mask_dir is not None:
-            mask_path = os.path.join(self.mask_dir, info['file_name'])
+            mask_path = self._get_actual_file_path(self.mask_dir, info['file_name'])
             mask_img  = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
             if mask_img is None:
                 raise FileNotFoundError(f"Mask not found: {mask_path}")
