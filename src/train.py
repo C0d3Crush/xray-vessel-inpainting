@@ -1287,17 +1287,17 @@ def train_model(
         if val_psnr > best_val_psnr:
             best_val_psnr = val_psnr
             best_path = os.path.join(output_dir, 'best.pth')
-            save_checkpoint(model, optimizer, epoch, train_loss, best_path)
+            save_checkpoint(model, optimizer, epoch, best_path, current_metrics)
             if use_drive:
                 drive_best = os.path.join(drive_ckpt_dir, 'best.pth')
-                save_checkpoint(model, optimizer, epoch, train_loss, drive_best)
+                save_checkpoint(model, optimizer, epoch, drive_best, current_metrics)
 
         if epoch % save_every == 0:
             epoch_path = os.path.join(output_dir, f'epoch_{epoch:03d}.pth')
-            save_checkpoint(model, optimizer, epoch, train_loss, epoch_path)
+            save_checkpoint(model, optimizer, epoch, epoch_path, current_metrics)
             if use_drive:
                 drive_epoch = os.path.join(drive_ckpt_dir, f'epoch_{epoch:03d}.pth')
-                save_checkpoint(model, optimizer, epoch, train_loss, drive_epoch)
+                save_checkpoint(model, optimizer, epoch, drive_epoch, current_metrics)
 
             # Rotate old checkpoints
             if keep_checkpoints > 0:
