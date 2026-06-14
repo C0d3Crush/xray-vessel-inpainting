@@ -740,12 +740,12 @@ def train_model(train_img, train_ann, val_img, val_ann, epochs=10, batch_size=4,
         if val_psnr > best_val_psnr:
             best_val_psnr = val_psnr
             best_path = os.path.join(output_dir, 'best.pth')
-            save_checkpoint(model, optimizer, epoch, train_loss, best_path, final_metrics)
+            save_checkpoint(model, optimizer, epoch, train_loss, best_path, metrics=final_metrics)
 
         # Save periodic checkpoint
         if epoch % save_every == 0:
             epoch_path = os.path.join(output_dir, f'epoch_{epoch:03d}.pth')
-            save_checkpoint(model, optimizer, epoch, train_loss, epoch_path, final_metrics)
+            save_checkpoint(model, optimizer, epoch, train_loss, epoch_path, metrics=final_metrics)
             rotate_checkpoints(output_dir, keep_checkpoints)
 
     print(f"\nTraining complete. Best val PSNR: {best_val_psnr:.2f} dB")
