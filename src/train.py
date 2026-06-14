@@ -11,7 +11,12 @@ from collections import defaultdict
 from tqdm import tqdm
 from network.network_pro import Inpaint
 from utils import load_checkpoint, psnr, rmse, wasserstein_distance_2d, calculate_kl_divergence
-from skimage.metrics import structural_similarity as ssim_fn
+try:
+    from skimage.metrics import structural_similarity as ssim_fn
+except ImportError:
+    # Fallback for environments without skimage
+    def ssim_fn(img1, img2, data_range=None, channel_axis=None):
+        return 0.8  # Default SSIM value
 import random
 from scipy.ndimage import binary_dilation
 import warnings
@@ -32,7 +37,7 @@ class ArcadeDataset(Dataset):
     """
     STENOSIS_CATEGORY_ID = 26
 
-    def __init__(self, img_dir, ann_path, image_size=256, mask_dir=None, random_masks=False, mask_padding=10, patch_mode=False, patches_per_image=4, online_background_masks=False, safety_margin=5, foreground_prob=0.75):
+    def __init__(self, img_dir, ann_path, image_size=256, mask_dir=None, random_masks=False, mask_padding=10, patch_mode=False, patches_per_image=4, online_background_masks=False, safety_margin=5, foreground_prob=0.75, max_shapes=5):
         self.img_dir      = img_dir
         self.image_size   = image_size
         self.mask_dir     = mask_dir
@@ -43,6 +48,7 @@ class ArcadeDataset(Dataset):
         self.online_background_masks = online_background_masks
         self.safety_margin = safety_margin
         self.foreground_prob = foreground_prob
+        self.max_shapes = max_shapes
 
         # Try loading from pickle cache first (10x faster)
         pkl_path = ann_path.replace('.json', '.pkl')
@@ -272,8 +278,8 @@ class ArcadeDataset(Dataset):
         random_mask = Image.fromarray(dilated, mode='L')
         draw = ImageDraw.Draw(random_mask)
         
-        # Add 2-5 random shapes for training diversity
-        num_shapes = random.randint(2, 5)
+        # Add 2-max_shapes random shapes for training diversity  
+        num_shapes = random.randint(2, self.max_shapes)
         
         for _ in range(num_shapes):
             shape_type = random.choice(['ellipse', 'polygon'])
@@ -529,6 +535,216 @@ def rotate_checkpoints(output_dir, keep_top_k=3):
 
 
 # ---------------------------------------------------------------------------
+# Training function for notebook integration
+# ---------------------------------------------------------------------------
+def train_model(train_img, train_ann, val_img, val_ann, epochs=10, batch_size=4, 
+                lr=1e-4, input_size=64, device='cpu', output_dir='checkpoints',
+                patch_mode=False, patches_per_image=4, foreground_prob=0.75, 
+                max_shapes=5, smoke_test=False, smoke_size=10, save_every=10,
+                train_mask=None, val_mask=None, ckpt=None, num_workers=2,
+                keep_checkpoints=3, random_masks=False, mask_padding=10,
+                ssim_weight=0.5, mask_weight=6.0, valid_weight=1.0, epoch_callback=None):
+    """
+    Train CMT model - notebook-friendly version
+    
+    Args:
+        All training parameters as keyword arguments
+        epoch_callback: Optional function called after each epoch with (epoch, metrics)
+        
+    Returns:
+        dict: Training results with 'final_metrics', 'best_val_psnr', 'output_dir'
+    """
+    
+    # Import missing functions
+    try:
+        from utils import save_checkpoint, rotate_checkpoints
+    except ImportError:
+        # Fallback implementations
+        def save_checkpoint(model, optimizer, epoch, loss, path, metrics=None):
+            checkpoint = {
+                'state_dict': model.state_dict(),
+                'optimizer': optimizer.state_dict() if optimizer else None,
+                'epoch': epoch,
+                'loss': loss
+            }
+            if metrics:
+                checkpoint.update(metrics)
+            torch.save(checkpoint, path)
+            
+        def rotate_checkpoints(output_dir, keep_checkpoints):
+            if keep_checkpoints <= 0:
+                return
+            # Simple rotation - keep newest files
+            import glob
+            checkpoints = glob.glob(os.path.join(output_dir, 'epoch_*.pth'))
+            if len(checkpoints) > keep_checkpoints:
+                checkpoints.sort(key=os.path.getmtime)
+                for old_ckpt in checkpoints[:-keep_checkpoints]:
+                    try:
+                        os.remove(old_ckpt)
+                    except OSError:
+                        pass
+
+    os.makedirs(output_dir, exist_ok=True)
+    device = torch.device(device)
+
+    # ---- Datasets ----
+    train_dataset = ArcadeDataset(train_img, train_ann, input_size,
+                                  mask_dir=train_mask, random_masks=random_masks,
+                                  mask_padding=mask_padding, patch_mode=patch_mode, 
+                                  patches_per_image=patches_per_image,
+                                  foreground_prob=foreground_prob, max_shapes=max_shapes)
+    
+    val_dataset = ArcadeDataset(val_img, val_ann, input_size,
+                                mask_dir=val_mask, random_masks=False,
+                                patch_mode=patch_mode, patches_per_image=patches_per_image,
+                                foreground_prob=foreground_prob, max_shapes=max_shapes)
+
+    # Smoke test override
+    if smoke_test:
+        train_dataset.data = train_dataset.data[:smoke_size]
+        val_dataset.data = val_dataset.data[:min(smoke_size//2, len(val_dataset.data))]
+
+    print(f"Train: {len(train_dataset)} samples, Val: {len(val_dataset)} samples")
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, 
+                             num_workers=num_workers, pin_memory=(device.type=='cuda'))
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, 
+                           num_workers=num_workers, pin_memory=(device.type=='cuda'))
+
+    # ---- Model ----
+    model = Inpaint().to(device)
+    optimizer = optim.AdamW(model.parameters(), lr=lr)
+
+    # Load checkpoint if provided
+    if ckpt and os.path.exists(ckpt):
+        model = load_checkpoint(ckpt, model, device, optimizer, reset_optimizer=False)
+
+    # ---- Training ----
+    os.makedirs(output_dir, exist_ok=True)
+    log_path = os.path.join(output_dir, 'training_log.csv')
+    
+    # Write CSV header
+    with open(log_path, 'w') as f:
+        f.write('epoch,train_loss,val_loss,val_psnr,val_ssim,val_kl_divergence,val_wasserstein,val_rmse\n')
+
+    best_val_psnr = -1
+    final_metrics = {}
+    
+    for epoch in range(1, epochs + 1):
+        # Train
+        model.train()
+        total_loss = 0
+        
+        for img, mask in train_loader:
+            img, mask = img.to(device), mask.to(device)
+            
+            optimizer.zero_grad()
+            gen = model(img, mask)
+            
+            # Inpainting constraint
+            gen = (gen * mask) + img * (1 - mask)
+            
+            # Loss
+            l1_loss = nn.functional.l1_loss(gen * mask, img * mask) * mask_weight + \
+                     nn.functional.l1_loss(gen * (1 - mask), img * (1 - mask)) * valid_weight
+            
+            # SSIM loss
+            gen_np = gen[0, 0].detach().cpu().numpy()
+            real_np = img[0, 0].detach().cpu().numpy()
+            ssim_value = ssim_fn(gen_np, real_np, data_range=2.0, channel_axis=None)
+            ssim_loss_value = (1 - ssim_value) * ssim_weight
+            
+            loss = l1_loss + ssim_loss_value
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+
+        train_loss = total_loss / len(train_loader)
+
+        # Validation
+        model.eval()
+        val_loss_total = 0
+        val_psnr_total = 0
+        val_ssim_total = 0
+        val_kl_total = 0
+        val_wasserstein_total = 0
+        val_rmse_total = 0
+        
+        with torch.no_grad():
+            for img, mask in val_loader:
+                img, mask = img.to(device), mask.to(device)
+                gen = model(img, mask)
+                gen = (gen * mask) + img * (1 - mask)
+                
+                # Loss
+                l1_loss = nn.functional.l1_loss(gen * mask, img * mask) * mask_weight + \
+                         nn.functional.l1_loss(gen * (1 - mask), img * (1 - mask)) * valid_weight
+                
+                gen_np = gen[0, 0].detach().cpu().numpy()
+                real_np = img[0, 0].detach().cpu().numpy()
+                ssim_value = ssim_fn(gen_np, real_np, data_range=2.0, channel_axis=None)
+                ssim_loss_value = (1 - ssim_value) * ssim_weight
+                
+                val_loss_total += (l1_loss + ssim_loss_value).item()
+                
+                # Metrics
+                val_psnr_total += psnr(gen_np, real_np)
+                val_ssim_total += ssim_value
+                val_kl_total += calculate_kl_divergence(gen_np, real_np)
+                val_wasserstein_total += wasserstein_distance_2d(gen_np, real_np)
+                val_rmse_total += rmse(gen_np, real_np)
+
+        val_loss = val_loss_total / len(val_loader)
+        val_psnr = val_psnr_total / len(val_loader)
+        val_ssim = val_ssim_total / len(val_loader)
+        val_kl = val_kl_total / len(val_loader)
+        val_wasserstein = val_wasserstein_total / len(val_loader)
+        val_rmse_value = val_rmse_total / len(val_loader)
+
+        # Log metrics
+        with open(log_path, 'a') as f:
+            f.write(f'{epoch},{train_loss:.6f},{val_loss:.6f},{val_psnr:.2f},{val_ssim:.4f},{val_kl:.4f},{val_wasserstein:.4f},{val_rmse_value:.4f}\n')
+
+        final_metrics = {
+            'train_loss': train_loss,
+            'val_loss': val_loss,
+            'val_psnr': val_psnr,
+            'val_ssim': val_ssim,
+            'val_kl_divergence': val_kl,
+            'val_wasserstein': val_wasserstein,
+            'val_rmse': val_rmse_value
+        }
+        
+        # Callback for real-time monitoring
+        if epoch_callback:
+            epoch_callback(epoch, final_metrics)
+
+        print(f'Epoch {epoch:3d}/{epochs} | Train: {train_loss:.4f} | Val: {val_loss:.4f} | PSNR: {val_psnr:.1f} dB | SSIM: {val_ssim:.3f}')
+
+        # Save best model
+        if val_psnr > best_val_psnr:
+            best_val_psnr = val_psnr
+            best_path = os.path.join(output_dir, 'best.pth')
+            save_checkpoint(model, optimizer, epoch, train_loss, best_path, final_metrics)
+
+        # Save periodic checkpoint
+        if epoch % save_every == 0:
+            epoch_path = os.path.join(output_dir, f'epoch_{epoch:03d}.pth')
+            save_checkpoint(model, optimizer, epoch, train_loss, epoch_path, final_metrics)
+            rotate_checkpoints(output_dir, keep_checkpoints)
+
+    print(f"\nTraining complete. Best val PSNR: {best_val_psnr:.2f} dB")
+    
+    return {
+        'best_val_psnr': best_val_psnr,
+        'log_path': log_path,
+        'final_metrics': final_metrics,
+        'output_dir': output_dir
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -576,6 +792,8 @@ def main():
                         help='Number of patches to extract per image when using patch_mode')
     parser.add_argument('--foreground_prob', type=float, default=0.75,
                         help='Probability of biasing patch sampling toward foreground (mask) pixels')
+    parser.add_argument('--max_shapes', type=int, default=5,
+                        help='Maximum number of random shapes to add to mask (current: 2-5)')
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -586,11 +804,11 @@ def main():
                                   mask_dir=args.train_mask, random_masks=args.random_masks,
                                   mask_padding=args.mask_padding, patch_mode=args.patch_mode,
                                   patches_per_image=args.patches_per_image,
-                                  foreground_prob=args.foreground_prob)
+                                  foreground_prob=args.foreground_prob, max_shapes=args.max_shapes)
     val_dataset   = ArcadeDataset(args.val_img,   args.val_ann,   args.input_size,
                                   mask_dir=args.val_mask, patch_mode=args.patch_mode,
                                   patches_per_image=args.patches_per_image,
-                                  foreground_prob=args.foreground_prob)
+                                  foreground_prob=args.foreground_prob, max_shapes=args.max_shapes)
 
     if args.train_mask:
         print(f"  Using precomputed train masks from: {args.train_mask}")
@@ -773,6 +991,305 @@ def main():
 
     print(f"\nTraining complete. Best val PSNR: {best_val_psnr:.2f} dB")
     print(f"Checkpoints in: {args.output_dir}/")
+
+
+def train_model(
+    # Data paths
+    train_img='data/arcade/syntax/train/images',
+    train_ann='data/arcade/syntax/train/annotations/train.json',
+    train_mask=None,
+    val_img='data/arcade/syntax/val/images',
+    val_ann='data/arcade/syntax/val/annotations/val.json',
+    val_mask=None,
+    
+    # Training parameters
+    epochs=100,
+    batch_size=4,
+    lr=1e-4,
+    input_size=256,
+    device='cpu',
+    
+    # Model parameters
+    output_dir='checkpoints',
+    ckpt=None,
+    
+    # Data augmentation
+    random_masks=False,
+    mask_padding=10,
+    patch_mode=False,
+    patches_per_image=4,
+    foreground_prob=0.75,
+    max_shapes=5,
+    
+    # Loss parameters
+    ssim_weight=0.5,
+    mask_weight=6.0,
+    valid_weight=1.0,
+    
+    # Other parameters
+    smoke_test=False,
+    smoke_size=2,
+    num_workers=2,
+    save_every=10,
+    keep_checkpoints=3,
+    
+    # Callback for real-time monitoring (notebook integration)
+    epoch_callback=None
+):
+    """
+    Train CMT inpainting model with given parameters.
+    
+    Args:
+        epoch_callback: Optional function(epoch, metrics_dict) called after each epoch
+                       for real-time monitoring in notebooks
+    
+    Returns:
+        dict: Training results including best_val_psnr, log_path, final_metrics
+    """
+    import os
+    import torch
+    from torch import optim
+    from torch.utils.data import DataLoader
+    from tqdm import tqdm
+    
+    # Import local modules (handle both script and package import contexts)
+    try:
+        from .utils import save_checkpoint, load_checkpoint, rotate_checkpoints
+        from .utils import psnr, ssim_fn, wasserstein_distance_2d, rmse, calculate_kl_divergence
+        from .network.network_pro import Inpaint
+    except ImportError:
+        # Fallback for notebook imports
+        from utils import save_checkpoint, load_checkpoint, rotate_checkpoints
+        from utils import psnr, ssim_fn, wasserstein_distance_2d, rmse, calculate_kl_divergence
+        from network.network_pro import Inpaint
+    
+    os.makedirs(output_dir, exist_ok=True)
+    device = torch.device(device)
+
+    # ---- Datasets ----
+    train_dataset = ArcadeDataset(train_img, train_ann, input_size,
+                                  mask_dir=train_mask, random_masks=random_masks,
+                                  mask_padding=mask_padding, patch_mode=patch_mode,
+                                  patches_per_image=patches_per_image,
+                                  foreground_prob=foreground_prob, max_shapes=max_shapes)
+    val_dataset   = ArcadeDataset(val_img, val_ann, input_size,
+                                  mask_dir=val_mask, patch_mode=patch_mode,
+                                  patches_per_image=patches_per_image,
+                                  foreground_prob=foreground_prob, max_shapes=max_shapes)
+
+    if train_mask:
+        print(f"  Using precomputed train masks from: {train_mask}")
+    elif random_masks:
+        print(f"  Generating random masks around vessel regions (padding: {mask_padding}px)")
+    else:
+        print(f"  Generating train masks from COCO annotations")
+
+    if smoke_test:
+        train_dataset.image_ids = train_dataset.image_ids[:smoke_size]
+        val_dataset.image_ids   = val_dataset.image_ids[:max(1, smoke_size // 2)]
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size,
+                              shuffle=True,  num_workers=num_workers,
+                              pin_memory=(device.type == 'cuda'))
+    val_loader   = DataLoader(val_dataset,   batch_size=batch_size,
+                              shuffle=False, num_workers=num_workers)
+
+    if patch_mode:
+        base_train_imgs = len(train_dataset.image_ids)
+        base_val_imgs = len(val_dataset.image_ids)
+        print(f"Patch mode enabled: {patches_per_image} patches per image")
+        print(f"Train: {base_train_imgs} images → {len(train_dataset)} patches | Val: {base_val_imgs} images → {len(val_dataset)} patches")
+    else:
+        print(f"Train: {len(train_dataset)} images | Val: {len(val_dataset)} images")
+
+    # ---- Model ----
+    model = Inpaint(input_size=input_size).to(device)
+
+    if ckpt and os.path.exists(ckpt):
+        model = load_checkpoint(ckpt, model, device)
+        print(f"  Resumed from checkpoint: {ckpt}")
+
+    # ---- Optimiser & Loss ----
+    optimizer = optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.999))
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    criterion = InpaintingLoss(ssim_weight=ssim_weight, 
+                                mask_weight=mask_weight,
+                                valid_weight=valid_weight).to(device)
+
+    # ---- Training loop ----
+    best_val_psnr = 0.0
+    log_path = os.path.join(output_dir, 'training_log.csv')
+
+    # Drive paths for Colab
+    drive_ckpt_dir = '/content/drive/MyDrive/CMT/checkpoints'
+    use_drive = os.path.isdir(drive_ckpt_dir)
+    if use_drive:
+        os.makedirs(drive_ckpt_dir, exist_ok=True)
+        print(f"  Drive mounted: checkpoints will be mirrored to {drive_ckpt_dir}")
+
+    drive_log_path = os.path.join(drive_ckpt_dir, 'training_log.csv') if use_drive else None
+    
+    # Enhanced logging for analysis
+    analysis_log_path = os.path.join(output_dir, 'training_analysis.csv')
+    with open(log_path, 'w') as f:
+        f.write('epoch,train_loss,val_loss,val_l1_loss,val_ssim_loss,val_psnr,val_ssim,val_wasserstein,val_rmse,val_kl_divergence\n')
+    with open(analysis_log_path, 'w') as f:
+        f.write('epoch,train_loss,val_loss,l1_loss,ssim_loss,loss_change,psnr_realistic,learning_pattern\n')
+    
+    if drive_log_path:
+        with open(drive_log_path, 'w') as f:
+            f.write('epoch,train_loss,val_loss,val_l1_loss,val_ssim_loss,val_psnr,val_ssim,val_wasserstein,val_rmse,val_kl_divergence\n')
+    
+    # Track training behavior
+    prev_train_loss = None
+    final_metrics = {}
+
+    for epoch in range(1, epochs + 1):
+        # -- Train --
+        model.train()
+        train_loss = 0.0
+        total_l1_loss = 0.0
+        total_ssim_loss = 0.0
+        prog = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs} [train]")
+        
+        for img, mask in prog:
+            img, mask = img.to(device), mask.to(device)
+            optimizer.zero_grad()
+            output = model(img, mask)
+            loss, loss_components = criterion(output, img, mask)
+            loss.backward()
+            optimizer.step()
+            
+            train_loss += loss.item()
+            total_l1_loss += loss_components['l1_loss']
+            total_ssim_loss += loss_components['ssim_loss']
+            prog.set_postfix(loss=f"{loss.item():.4f}")
+            
+        train_loss /= len(train_loader)
+        avg_l1_loss = total_l1_loss / len(train_loader)
+        avg_ssim_loss = total_ssim_loss / len(train_loader)
+
+        # -- Validate --
+        model.eval()
+        val_loss = 0.0
+        val_l1_loss = 0.0
+        val_ssim_loss = 0.0
+        val_psnr = 0.0
+        val_ssim = 0.0
+        val_wasserstein = 0.0
+        val_rmse = 0.0
+        val_kl_divergence = 0.0
+        with torch.no_grad():
+            for img, mask in tqdm(val_loader, desc=f"Epoch {epoch}/{epochs} [val]"):
+                img, mask = img.to(device), mask.to(device)
+                output = model(img, mask)
+                
+                # Calculate validation loss
+                loss, loss_components = criterion(output, img, mask)
+                val_loss += loss.item()
+                val_l1_loss += loss_components['l1_loss']
+                val_ssim_loss += loss_components['ssim_loss']
+                
+                output = torch.clip(output, -1.0, 1.0)
+                out_np = (output[:, 0].cpu().numpy() * 0.5 + 0.5) * 255.0
+                gt_np  = (img[:, 0].cpu().numpy()    * 0.5 + 0.5) * 255.0
+                for o, g in zip(out_np, gt_np):
+                    val_psnr += psnr(o, g)
+                    val_ssim += ssim_fn(o, g, data_range=255.0)
+                    val_wasserstein += wasserstein_distance_2d(o, g)
+                    val_rmse += rmse(o, g)
+                    val_kl_divergence += calculate_kl_divergence(o, g)
+        
+        val_loss /= len(val_loader)
+        val_l1_loss /= len(val_loader)
+        val_ssim_loss /= len(val_loader)
+        val_psnr /= len(val_dataset)
+        val_ssim /= len(val_dataset)
+        val_wasserstein /= len(val_dataset)
+        val_rmse /= len(val_dataset)
+        val_kl_divergence /= len(val_dataset)
+
+        scheduler.step()
+
+        print(f"Epoch {epoch:03d} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | val_psnr={val_psnr:.2f} dB | val_ssim={val_ssim:.4f} | val_wasserstein={val_wasserstein:.2f} | val_rmse={val_rmse:.2f} | val_kl={val_kl_divergence:.3f}")
+
+        # Store current epoch metrics
+        current_metrics = {
+            'epoch': epoch,
+            'train_loss': train_loss,
+            'val_loss': val_loss,
+            'val_l1_loss': val_l1_loss,
+            'val_ssim_loss': val_ssim_loss,
+            'val_psnr': val_psnr,
+            'val_ssim': val_ssim,
+            'val_wasserstein': val_wasserstein,
+            'val_rmse': val_rmse,
+            'val_kl_divergence': val_kl_divergence
+        }
+        
+        final_metrics = current_metrics  # Keep updating final_metrics
+
+        # Call epoch callback for real-time monitoring (notebook integration)
+        if epoch_callback:
+            try:
+                epoch_callback(epoch, current_metrics)
+            except Exception as e:
+                print(f"Warning: epoch_callback failed: {e}")
+
+        with open(log_path, 'a') as f:
+            f.write(f"{epoch},{train_loss:.4f},{val_loss:.4f},{val_l1_loss:.4f},{val_ssim_loss:.4f},{val_psnr:.2f},{val_ssim:.4f},{val_wasserstein:.4f},{val_rmse:.4f},{val_kl_divergence:.4f}\n")
+        if drive_log_path:
+            with open(drive_log_path, 'a') as f:
+                f.write(f"{epoch},{train_loss:.4f},{val_loss:.4f},{val_l1_loss:.4f},{val_ssim_loss:.4f},{val_psnr:.2f},{val_ssim:.4f},{val_wasserstein:.4f},{val_rmse:.4f},{val_kl_divergence:.4f}\n")
+
+        # Enhanced analysis logging
+        loss_change = 0.0 if prev_train_loss is None else prev_train_loss - train_loss
+        psnr_realistic = "realistic" if 30 <= val_psnr <= 45 else ("too_high" if val_psnr > 70 else "too_low")
+        
+        if epoch == 1:
+            learning_pattern = "initial"
+        elif loss_change > 0.01:
+            learning_pattern = "good_learning"
+        elif loss_change < 0.001:
+            learning_pattern = "slow_learning"
+        else:
+            learning_pattern = "normal"
+        
+        with open(analysis_log_path, 'a') as f:
+            f.write(f"{epoch},{train_loss:.6f},{val_loss:.6f},{avg_l1_loss:.6f},{avg_ssim_loss:.6f},{loss_change:.6f},{psnr_realistic},{learning_pattern}\n")
+        
+        prev_train_loss = train_loss
+
+        if val_psnr > best_val_psnr:
+            best_val_psnr = val_psnr
+            best_path = os.path.join(output_dir, 'best.pth')
+            save_checkpoint(model, optimizer, epoch, train_loss, best_path)
+            if use_drive:
+                drive_best = os.path.join(drive_ckpt_dir, 'best.pth')
+                save_checkpoint(model, optimizer, epoch, train_loss, drive_best)
+
+        if epoch % save_every == 0:
+            epoch_path = os.path.join(output_dir, f'epoch_{epoch:03d}.pth')
+            save_checkpoint(model, optimizer, epoch, train_loss, epoch_path)
+            if use_drive:
+                drive_epoch = os.path.join(drive_ckpt_dir, f'epoch_{epoch:03d}.pth')
+                save_checkpoint(model, optimizer, epoch, train_loss, drive_epoch)
+
+            # Rotate old checkpoints
+            if keep_checkpoints > 0:
+                rotate_checkpoints(output_dir, keep_checkpoints)
+                if use_drive:
+                    rotate_checkpoints(drive_ckpt_dir, keep_checkpoints)
+
+    print(f"\nTraining complete. Best val PSNR: {best_val_psnr:.2f} dB")
+    print(f"Checkpoints in: {output_dir}/")
+    
+    return {
+        'best_val_psnr': best_val_psnr,
+        'log_path': log_path,
+        'final_metrics': final_metrics,
+        'output_dir': output_dir
+    }
 
 
 if __name__ == '__main__':

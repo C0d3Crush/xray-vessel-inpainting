@@ -35,6 +35,43 @@ def load_checkpoint(path, model, device, optimizer=None, reset_optimizer=True, i
     return model
 
 
+def save_checkpoint(model, optimizer, epoch, path, metrics=None):
+    """Save model checkpoint with metrics"""
+    checkpoint = {
+        'state_dict': model.state_dict(),
+        'optimizer': optimizer.state_dict() if optimizer else None,
+        'epoch': epoch
+    }
+    if metrics:
+        checkpoint.update(metrics)
+    torch.save(checkpoint, path)
+    return checkpoint
+
+
+def rotate_checkpoints(output_dir, keep_checkpoints):
+    """Keep only the most recent N checkpoint files"""
+    if keep_checkpoints <= 0:
+        return
+    
+    import glob
+    import os
+    
+    # Find all epoch checkpoints (exclude best.pth)
+    checkpoints = glob.glob(os.path.join(output_dir, 'epoch_*.pth'))
+    
+    if len(checkpoints) > keep_checkpoints:
+        # Sort by modification time (newest first)
+        checkpoints.sort(key=os.path.getmtime, reverse=True)
+        
+        # Remove old checkpoints
+        for old_ckpt in checkpoints[keep_checkpoints:]:
+            try:
+                os.remove(old_ckpt)
+                print(f"  Rotated out: {os.path.basename(old_ckpt)}")
+            except OSError:
+                pass
+
+
 def calculate_psnr(img1, img2, max_val=255.0):
     """Calculate PSNR between two images"""
     if isinstance(img1, torch.Tensor):
