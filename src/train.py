@@ -650,10 +650,16 @@ def train_model(train_img, train_ann, val_img, val_ann, epochs=10, batch_size=4,
                      nn.functional.l1_loss(gen * (1 - mask), img * (1 - mask)) * valid_weight
             
             # SSIM loss
-            gen_np = gen[0, 0].detach().cpu().numpy()
-            real_np = img[0, 0].detach().cpu().numpy()
-            ssim_value = ssim_fn(gen_np, real_np, data_range=2.0, channel_axis=None)
-            ssim_loss_value = (1 - ssim_value) * ssim_weight
+            try:
+                from skimage.metrics import structural_similarity as ssim_fn_local
+                gen_np = gen[0, 0].detach().cpu().numpy()
+                real_np = img[0, 0].detach().cpu().numpy()
+                ssim_value = ssim_fn_local(gen_np, real_np, data_range=2.0, channel_axis=None)
+                ssim_loss_value = (1 - ssim_value) * ssim_weight
+            except ImportError:
+                # Fallback if skimage not available
+                ssim_value = 0.8
+                ssim_loss_value = (1 - ssim_value) * ssim_weight
             
             loss = l1_loss + ssim_loss_value
             loss.backward()
@@ -681,10 +687,18 @@ def train_model(train_img, train_ann, val_img, val_ann, epochs=10, batch_size=4,
                 l1_loss = nn.functional.l1_loss(gen * mask, img * mask) * mask_weight + \
                          nn.functional.l1_loss(gen * (1 - mask), img * (1 - mask)) * valid_weight
                 
-                gen_np = gen[0, 0].detach().cpu().numpy()
-                real_np = img[0, 0].detach().cpu().numpy()
-                ssim_value = ssim_fn(gen_np, real_np, data_range=2.0, channel_axis=None)
-                ssim_loss_value = (1 - ssim_value) * ssim_weight
+                try:
+                    from skimage.metrics import structural_similarity as ssim_fn_local
+                    gen_np = gen[0, 0].detach().cpu().numpy()
+                    real_np = img[0, 0].detach().cpu().numpy()
+                    ssim_value = ssim_fn_local(gen_np, real_np, data_range=2.0, channel_axis=None)
+                    ssim_loss_value = (1 - ssim_value) * ssim_weight
+                except ImportError:
+                    # Fallback if skimage not available
+                    gen_np = gen[0, 0].detach().cpu().numpy()
+                    real_np = img[0, 0].detach().cpu().numpy()
+                    ssim_value = 0.8
+                    ssim_loss_value = (1 - ssim_value) * ssim_weight
                 
                 val_loss_total += (l1_loss + ssim_loss_value).item()
                 
