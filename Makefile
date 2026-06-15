@@ -21,6 +21,7 @@ help:
 	@echo "  make cache-data      - Precompute masks & annotations (recommended)"
 # Legacy prepare-samples removed
 	@echo "  make prepare-patch-samples - Create 64×64 patches for proper visualization"
+	@echo "  make patch-comparison - Complete 64×64 patch workflow (prepare + inference + visualize)"
 	@echo "  make prepare-background-samples - Create random background masks (vessel-free)"
 	@echo "  make train           - Train CMT inpainting model"
 	@echo "  make inference       - Run patch-based inference on samples/"
@@ -30,6 +31,9 @@ help:
 	@echo "  make analyze-training - Advanced training analysis with medical insights"
 	@echo "  make hyperopt        - Run hyperparameter optimization (quick)"
 	@echo "  make hyperopt-full   - Run full hyperparameter optimization"
+	@echo "  make mask-overview   - Create comprehensive mask and vessel overview"
+	@echo "  make grid-patches    - Generate 8×8 grid patches with vessel-safe masks"
+	@echo "  make vessel-safe-train - Train with vessel-safe masks (same logic as grid system)"
 	@echo "  make clean           - Remove checkpoints and logs"
 	@echo ""
 	@echo "Testing targets:"
@@ -44,6 +48,7 @@ install:
 
 smoke-test:
 	python src/train.py --smoke_test --smoke_size 20 --epochs 1 --batch_size 1 --device cpu \
+		--patches_per_image 2 \
 		--train_img $(TRAIN_IMG) --train_ann $(TRAIN_ANN) \
 		--val_img $(VAL_IMG) --val_ann $(VAL_ANN)
 
@@ -75,8 +80,8 @@ cache-data:
 # Legacy prepare-samples removed - use prepare-patch-samples or prepare-background-samples
 
 prepare-patch-samples:
-	python scripts/prepare_samples.py --annotations $(VAL_ANN) --images $(VAL_IMG) --num-samples 8 --overwrite --output-img outputs/samples/full_img --output-mask outputs/samples/full_mask
-	python src/extract_patch_samples.py --img-dir outputs/samples/full_img --mask-dir outputs/samples/full_mask --output-img outputs/samples/patch_img --output-mask outputs/samples/patch_mask --patch-size $(INPUT_SIZE) --min-vessel-ratio 0.05
+	python scripts/prepare_samples.py --annotations $(VAL_ANN) --images $(VAL_IMG) --num-samples 8 --overwrite --output-img outputs/samples/test_img --output-mask outputs/samples/test_mask
+	python src/extract_patch_samples.py --img-dir outputs/samples/test_img --mask-dir outputs/samples/test_mask --output-img outputs/samples/patch_img --output-mask outputs/samples/patch_mask --patch-size $(INPUT_SIZE) --min-vessel-ratio 0.05
 
 prepare-background-samples:
 	python scripts/prepare_samples.py --annotations $(VAL_ANN) --images $(VAL_IMG) --num-samples 5 --overwrite --output-img outputs/samples/full_img --output-mask outputs/samples/full_mask
@@ -93,6 +98,7 @@ train:
 		--epochs $(EPOCHS) \
 		--batch_size $(BATCH_SIZE) \
 		--input_size $(INPUT_SIZE) \
+		--patches_per_image 6 \
 		--device $(DEVICE)
 
 inference:
@@ -120,9 +126,7 @@ training-comparison:
 		--output outputs/samples/patch_training_comparison.png \
 		--title "Patch Training Results (64×64 patches)" \
 		--images 104 162 66 9
-	@echo "Removing old comparison files..."
-	rm -f outputs/samples/comparisons/*.png
-	@echo "✓ 64×64 patch comparison created, old comparisons removed"
+	@echo "✓ 64×64 patch comparison created"
 
 plot:
 	@if [ -f checkpoints/training_log.csv ]; then \
@@ -202,3 +206,75 @@ hyperopt-background:
 	python scripts/hyperparameter_optimization.py --quick --device $(DEVICE) \
 		--train_img data/smoke_bg_img --train_mask data/smoke_bg_mask \
 		--val_img $(VAL_IMG) --val_ann $(VAL_ANN)
+
+# Standard 64×64 patch comparison workflow
+patch-comparison:
+	@echo "Creating complete 64×64 patch comparison..."
+	make prepare-patch-samples
+	make inference  
+	make training-comparison
+	@echo "✓ Complete patch comparison ready: outputs/samples/patch_training_comparison.png"
+
+# Mask and vessel overview generation
+mask-overview:
+	@echo "Creating comprehensive mask and vessel overview..."
+	python scripts/create_mask_overview.py \
+		--annotations $(VAL_ANN) \
+		--images $(VAL_IMG) \
+		--output-dir outputs/mask_overview \
+		--num-images 5 \
+		--grid-size 64
+	@echo "✓ Mask overview complete: outputs/mask_overview/"
+
+# Grid-based patch generation with vessel-safe masks
+grid-patches:
+	@echo "Generating 8×8 grid patches with vessel-safe masks..."
+	python scripts/generate_grid_masks.py \
+		--annotations $(VAL_ANN) \
+		--images $(VAL_IMG) \
+		--output-img outputs/grid_patches/images \
+		--output-mask outputs/grid_patches/masks \
+		--grid-size 64 \
+		--num-images 10 \
+		--max-coverage 0.30 \
+		--safety-margin 15
+	@echo "✓ Grid patches generated: outputs/grid_patches/"
+
+# Complete grid workflow: overview + patches
+grid-workflow:
+	@echo "Running complete grid-based workflow..."
+	make mask-overview
+	make grid-patches
+	@echo "✓ Complete grid workflow finished!"
+	@echo "  📊 Overview: outputs/mask_overview/"
+	@echo "  🎯 Patches: outputs/grid_patches/"
+
+# Vessel-safe training (same mask logic as grid system)
+vessel-safe-train:
+	@echo "Training with vessel-safe masks (same logic as grid system)..."
+	python src/train.py \
+		--vessel_safe_training \
+		--guaranteed_masks \
+		--train_img $(TRAIN_IMG) \
+		--train_ann $(TRAIN_ANN) \
+		--val_img $(VAL_IMG) \
+		--val_ann $(VAL_ANN) \
+		--output_dir checkpoints_vessel_safe \
+		--epochs $(EPOCHS) \
+		--batch_size $(BATCH_SIZE) \
+		--input_size $(INPUT_SIZE) \
+		--patches_per_image 6 \
+		--device $(DEVICE)
+	@echo "✓ Vessel-safe training complete with ZERO vessel overlap!"
+
+# Vessel-safe smoke test
+vessel-safe-smoke-test:
+	@echo "Vessel-safe smoke test..."
+	python src/train.py --smoke_test \
+		--vessel_safe_training \
+		--guaranteed_masks \
+		--epochs 1 --batch_size 1 --input_size 64 --patches_per_image 2 --device cpu \
+		--train_img $(TRAIN_IMG) --train_ann $(TRAIN_ANN) \
+		--val_img $(VAL_IMG) --val_ann $(VAL_ANN) \
+		--output_dir checkpoints_vessel_safe_test
+	@echo "✓ Vessel-safe smoke test complete!"

@@ -37,7 +37,7 @@ class ArcadeDataset(Dataset):
     """
     STENOSIS_CATEGORY_ID = 26
 
-    def __init__(self, img_dir, ann_path, image_size=64, mask_dir=None, random_masks=False, mask_padding=10, patches_per_image=4, online_background_masks=False, safety_margin=5, foreground_prob=0.75, max_shapes=5, background_training=True):
+    def __init__(self, img_dir, ann_path, image_size=64, mask_dir=None, random_masks=False, mask_padding=10, patches_per_image=4, online_background_masks=False, safety_margin=5, foreground_prob=0.75, max_shapes=5, background_training=True, vessel_safe_training=False, guaranteed_masks=False):
         self.img_dir      = img_dir
         self.image_size   = image_size
         self.mask_dir     = mask_dir
@@ -49,6 +49,8 @@ class ArcadeDataset(Dataset):
         self.foreground_prob = foreground_prob
         self.max_shapes = max_shapes
         self.background_training = background_training
+        self.vessel_safe_training = vessel_safe_training
+        self.guaranteed_masks = guaranteed_masks
 
         # Try loading from pickle cache first (10x faster)
         pkl_path = ann_path.replace('.json', '.pkl')
@@ -239,6 +241,162 @@ class ArcadeDataset(Dataset):
                 return mask, True
         
         return mask, False
+
+    def _create_vessel_safe_mask(self, image_id, W, H, max_coverage=0.25, min_coverage=0.05):
+        """Create vessel-safe background masks using EXACT same logic as generate_grid_masks.py."""
+        import random
+        
+        # Step 1: Get vessel exclusion zones
+        vessel_mask = self._make_mask_from_annotations(image_id, W, H)
+        vessel_np = np.array(vessel_mask, dtype=np.uint8)
+        
+        # Step 2: Create vessel exclusion zone with EXACT same parameters as Grid-System
+        safety_margin = 15  # EXACT same as Grid-System
+        kernel_size = max(5, safety_margin * 2 + 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        vessel_exclusion = cv2.dilate(vessel_np, kernel, iterations=2)  # Double iterations
+        
+        # Step 3: Generate vessel-safe background mask
+        bg_mask = np.zeros((H, W), dtype=np.uint8)
+        total_pixels = W * H
+        max_mask_pixels = int(total_pixels * max_coverage)
+        min_mask_pixels = int(total_pixels * min_coverage)
+        
+        # PHASE 1: Try normal shapes with ZERO vessel overlap tolerance
+        shapes = ['circle', 'rectangle', 'ellipse', 'triangle', 'line', 'blob']
+        successful_shapes = 0
+        max_attempts = 150  # More attempts for better coverage
+        
+        for attempt in range(max_attempts):
+            current_pixels = np.sum(bg_mask > 0)
+            
+            if current_pixels >= max_mask_pixels:
+                break
+                
+            shape_type = random.choice(shapes)
+            temp_mask = self._generate_vessel_safe_shape(shape_type, W, H)
+            
+            if temp_mask is None:
+                continue
+                
+            shape_pixels = np.sum(temp_mask > 0)
+            if shape_pixels == 0:
+                continue
+            
+            # Check vessel overlap - ZERO tolerance (same as Grid-System)
+            vessel_overlap = np.sum((temp_mask > 0) & (vessel_exclusion > 0))
+            
+            # Check existing mask overlap
+            existing_overlap = np.sum((temp_mask > 0) & (bg_mask > 0))
+            existing_ratio = existing_overlap / shape_pixels if shape_pixels > 0 else 1.0
+            
+            # Accept only shapes with NO vessel overlap and minimal existing overlap
+            if vessel_overlap == 0 and existing_ratio < 0.15:
+                combined_mask = np.maximum(bg_mask, temp_mask)
+                combined_pixels = np.sum(combined_mask > 0)
+                
+                if combined_pixels <= max_mask_pixels:
+                    bg_mask = combined_mask
+                    successful_shapes += 1
+        
+        # PHASE 2: Force minimum coverage if needed (same as Grid-System)
+        current_pixels = np.sum(bg_mask > 0)
+        if current_pixels < min_mask_pixels:
+            # Find completely free pixels
+            free_coords = np.where((vessel_exclusion == 0) & (bg_mask == 0))
+            
+            if len(free_coords[0]) > 0:
+                needed_pixels = min_mask_pixels - current_pixels
+                available_pixels = len(free_coords[0])
+                
+                if available_pixels >= needed_pixels:
+                    # Randomly select pixels to meet minimum requirement
+                    indices = random.sample(range(len(free_coords[0])), min(needed_pixels, available_pixels))
+                    
+                    for idx in indices:
+                        y, x = free_coords[0][idx], free_coords[1][idx]
+                        cv2.circle(bg_mask, (x, y), 2, 255, -1)  # Small 2px circles
+                    
+                    # Final cleanup (shouldn't be needed but be safe)
+                    bg_mask[vessel_exclusion > 0] = 0
+                    successful_shapes += 1
+        
+        # Final vessel cleanup - ensure ZERO overlap
+        bg_mask[vessel_exclusion > 0] = 0
+        final_pixels = np.sum(bg_mask > 0)
+        
+        print(f"  🎯 Vessel-safe mask: {successful_shapes} shapes, {final_pixels} pixels, "
+              f"{(final_pixels/total_pixels)*100:.1f}% coverage")
+        
+        return Image.fromarray(bg_mask, mode='L'), successful_shapes
+
+    def _generate_vessel_safe_shape(self, shape_type, W, H):
+        """Generate vessel-safe shapes using EXACT same logic as Grid-System."""
+        temp_mask = np.zeros((H, W), dtype=np.uint8)
+        
+        if shape_type == 'circle':
+            radius = random.randint(4, min(W, H) // 12)
+            center_x = random.randint(radius, W - radius)
+            center_y = random.randint(radius, H - radius)
+            cv2.circle(temp_mask, (center_x, center_y), radius, 255, -1)
+            
+        elif shape_type == 'rectangle':
+            w = random.randint(8, min(W, H) // 8)
+            h = random.randint(8, min(W, H) // 8)
+            x = random.randint(0, W - w)
+            y = random.randint(0, H - h)
+            cv2.rectangle(temp_mask, (x, y), (x + w, y + h), 255, -1)
+            
+        elif shape_type == 'ellipse':
+            center_x = random.randint(W // 6, 5 * W // 6)
+            center_y = random.randint(H // 6, 5 * H // 6)
+            axes_x = random.randint(4, min(W, H) // 12)
+            axes_y = random.randint(4, min(W, H) // 12)
+            angle = random.randint(0, 180)
+            cv2.ellipse(temp_mask, (center_x, center_y), (axes_x, axes_y), 
+                       angle, 0, 360, 255, -1)
+                       
+        elif shape_type == 'triangle':
+            center_x = random.randint(W // 6, 5 * W // 6)
+            center_y = random.randint(H // 6, 5 * H // 6)
+            size = random.randint(6, min(W, H) // 10)
+            
+            points = np.array([
+                [center_x, center_y - size],
+                [center_x - size, center_y + size//2],
+                [center_x + size, center_y + size//2]
+            ], dtype=np.int32)
+            cv2.fillPoly(temp_mask, [points], 255)
+            
+        elif shape_type == 'line':
+            start_x = random.randint(0, W)
+            start_y = random.randint(0, H)
+            end_x = random.randint(0, W)
+            end_y = random.randint(0, H)
+            thickness = random.randint(3, 8)
+            cv2.line(temp_mask, (start_x, start_y), (end_x, end_y), 255, thickness)
+            
+        elif shape_type == 'blob':
+            center_x = random.randint(W // 6, 5 * W // 6)
+            center_y = random.randint(H // 6, 5 * H // 6)
+            base_size = random.randint(6, min(W, H) // 12)
+            
+            num_points = random.randint(5, 8)
+            angles = np.linspace(0, 2*np.pi, num_points+1)[:-1]
+            points = []
+            for angle in angles:
+                radius = base_size * random.uniform(0.6, 1.4)
+                x = int(center_x + radius * np.cos(angle))
+                y = int(center_y + radius * np.sin(angle))
+                # Clamp to image boundaries
+                x = max(0, min(W-1, x))
+                y = max(0, min(H-1, y))
+                points.append([x, y])
+            
+            points = np.array(points, dtype=np.int32)
+            cv2.fillPoly(temp_mask, [points], 255)
+        
+        return temp_mask
 
     def _make_mask_from_annotations(self, image_id, W, H):
         """Rasterise vessel polygons into a binary mask (255 = vessel)."""
@@ -930,8 +1088,12 @@ class ArcadeDataset(Dataset):
         else:
             # Choose mask generation strategy based on training mode
             if self.background_training:
-                # CORRECT: Generate background masks (avoiding vessels)
-                mask_pil = self._make_background_mask_from_annotations(image_id, W, H)
+                if self.vessel_safe_training:
+                    # NEW: Generate vessel-safe background masks using Grid-System logic
+                    mask_pil, num_shapes = self._create_vessel_safe_mask(image_id, W, H)
+                else:
+                    # LEGACY: Generate background masks (avoiding vessels)
+                    mask_pil = self._make_background_mask_from_annotations(image_id, W, H)
             else:
                 # INFERENCE: Generate vessel masks (for vessel removal)
                 base_mask_pil = self._make_mask_from_annotations(image_id, W, H)
@@ -1323,6 +1485,10 @@ def main():
                         help='Probability of biasing patch sampling toward foreground (mask) pixels')
     parser.add_argument('--max_shapes', type=int, default=5,
                         help='Maximum number of random shapes to add to mask (current: 2-5)')
+    parser.add_argument('--vessel_safe_training', action='store_true',
+                        help='Use vessel-safe mask generation (EXACT same logic as generate_grid_masks.py)')
+    parser.add_argument('--guaranteed_masks', action='store_true',
+                        help='Force minimum mask coverage per patch (ensures every patch has training signal)')
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -1333,7 +1499,9 @@ def main():
                                   mask_dir=args.train_mask, random_masks=args.random_masks,
                                   mask_padding=args.mask_padding,
                                   patches_per_image=args.patches_per_image,
-                                  foreground_prob=args.foreground_prob, max_shapes=args.max_shapes)
+                                  foreground_prob=args.foreground_prob, max_shapes=args.max_shapes,
+                                  vessel_safe_training=args.vessel_safe_training, 
+                                  guaranteed_masks=args.guaranteed_masks)
     val_dataset   = ArcadeDataset(args.val_img,   args.val_ann,   args.input_size,
                                   mask_dir=args.val_mask,
                                   patches_per_image=args.patches_per_image,
