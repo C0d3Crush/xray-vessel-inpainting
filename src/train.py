@@ -37,18 +37,18 @@ class ArcadeDataset(Dataset):
     """
     STENOSIS_CATEGORY_ID = 26
 
-    def __init__(self, img_dir, ann_path, image_size=256, mask_dir=None, random_masks=False, mask_padding=10, patch_mode=False, patches_per_image=4, online_background_masks=False, safety_margin=5, foreground_prob=0.75, max_shapes=5):
+    def __init__(self, img_dir, ann_path, image_size=64, mask_dir=None, random_masks=False, mask_padding=10, patches_per_image=4, online_background_masks=False, safety_margin=5, foreground_prob=0.75, max_shapes=5, background_training=True):
         self.img_dir      = img_dir
         self.image_size   = image_size
         self.mask_dir     = mask_dir
         self.random_masks = random_masks
         self.mask_padding = mask_padding
-        self.patch_mode   = patch_mode
         self.patches_per_image = patches_per_image
         self.online_background_masks = online_background_masks
         self.safety_margin = safety_margin
         self.foreground_prob = foreground_prob
         self.max_shapes = max_shapes
+        self.background_training = background_training
 
         # Try loading from pickle cache first (10x faster)
         pkl_path = ann_path.replace('.json', '.pkl')
@@ -79,9 +79,7 @@ class ArcadeDataset(Dataset):
             self.image_ids = self._filter_existing_files()
 
     def __len__(self):
-        if self.patch_mode:
-            return len(self.image_ids) * self.patches_per_image
-        return len(self.image_ids)
+        return len(self.image_ids) * self.patches_per_image
 
     def _filter_existing_files(self):
         """Filter image_ids to only include those with existing background files."""
@@ -252,6 +250,439 @@ class ArcadeDataset(Dataset):
                 if len(xy) >= 3:
                     draw.polygon(xy, fill=255)
         return mask
+    
+    def _make_background_mask_from_annotations(self, image_id, W, H):
+        """Generate random background masks avoiding vessel regions (255 = background)."""
+        import random
+        
+        # Step 1: Get vessel exclusion zones
+        vessel_mask = self._make_mask_from_annotations(image_id, W, H)
+        vessel_np = np.array(vessel_mask, dtype=np.uint8)
+        
+        # Step 2: Create vessel exclusion zone with enhanced safety margin
+        # Use larger padding for background training to ensure vessel-free regions
+        enhanced_margin = max(8, self.safety_margin * 3)  # Tripled safety margin
+        kernel_size = max(5, enhanced_margin * 2 + 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        vessel_exclusion = cv2.dilate(vessel_np, kernel, iterations=2)  # Double dilation
+        
+        # Step 3: Generate random background patches
+        bg_mask = np.zeros((H, W), dtype=np.uint8)
+        num_shapes = random.randint(3, min(8, self.max_shapes + 3))  # More background patches
+        
+        successful_shapes = 0
+        max_attempts = 100
+        
+        for shape_idx in range(num_shapes):
+            for attempt in range(max_attempts):
+                shape_type = random.choice(['circle', 'rectangle', 'ellipse'])
+                
+                if shape_type == 'circle':
+                    # Random circle in background
+                    radius = random.randint(8, min(W, H) // 8)
+                    center_x = random.randint(radius, W - radius)
+                    center_y = random.randint(radius, H - radius)
+                    
+                    # Create temporary mask for this shape
+                    temp_mask = np.zeros((H, W), dtype=np.uint8)
+                    cv2.circle(temp_mask, (center_x, center_y), radius, 255, -1)
+                    
+                elif shape_type == 'rectangle':
+                    # Random rectangle in background
+                    width = random.randint(10, min(W, H) // 6)
+                    height = random.randint(10, min(W, H) // 6)
+                    x = random.randint(0, W - width)
+                    y = random.randint(0, H - height)
+                    
+                    # Create temporary mask
+                    temp_mask = np.zeros((H, W), dtype=np.uint8)
+                    cv2.rectangle(temp_mask, (x, y), (x + width, y + height), 255, -1)
+                    
+                else:  # ellipse
+                    # Random ellipse in background
+                    center_x = random.randint(W // 6, 5 * W // 6)
+                    center_y = random.randint(H // 6, 5 * H // 6)
+                    axes_x = random.randint(8, min(W, H) // 10)
+                    axes_y = random.randint(8, min(W, H) // 10)
+                    angle = random.randint(0, 180)
+                    
+                    # Create temporary mask
+                    temp_mask = np.zeros((H, W), dtype=np.uint8)
+                    cv2.ellipse(temp_mask, (center_x, center_y), (axes_x, axes_y), angle, 0, 360, 255, -1)
+                
+                # Check overlap with vessel exclusion zone
+                overlap_pixels = np.sum((temp_mask > 0) & (vessel_exclusion > 0))
+                shape_pixels = np.sum(temp_mask > 0)
+                
+                if shape_pixels > 0:
+                    overlap_ratio = overlap_pixels / shape_pixels
+                    
+                    # Stricter overlap control for background training (less than 3% overlap)
+                    if overlap_ratio < 0.03:  # Much stricter: only 3% overlap allowed
+                        bg_mask = np.maximum(bg_mask, temp_mask)
+                        successful_shapes += 1
+                        break
+        
+        # Ensure we have meaningful background coverage (at least 5%, max 25%)
+        total_pixels = W * H
+        bg_coverage = np.sum(bg_mask > 0) / total_pixels
+        
+        if bg_coverage < 0.05:
+            # Add one safe central rectangle if we have too little coverage
+            safe_size = min(W, H) // 8
+            center_x, center_y = W // 2, H // 2
+            x1 = center_x - safe_size // 2
+            y1 = center_y - safe_size // 2
+            x2 = center_x + safe_size // 2
+            y2 = center_y + safe_size // 2
+            
+            # Check if center is vessel-free
+            center_exclusion = vessel_exclusion[y1:y2, x1:x2]
+            if np.sum(center_exclusion > 0) / (safe_size * safe_size) < 0.2:
+                cv2.rectangle(bg_mask, (x1, y1), (x2, y2), 255, -1)
+        
+        elif bg_coverage > 0.25:
+            # Reduce mask if too much coverage
+            kernel_reduce = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            bg_mask = cv2.erode(bg_mask, kernel_reduce, iterations=1)
+        
+        return Image.fromarray(bg_mask, mode='L')
+    
+    def _generate_enhanced_background_mask(self, image_id, W, H, min_shapes=4, max_shapes=8):
+        """
+        Generate enhanced background masks with superior vessel avoidance.
+        
+        Features:
+        - Multi-level vessel exclusion (original + dilated + super-dilated)
+        - Intelligent shape placement avoiding vessel corridors  
+        - Adaptive shape sizing based on available space
+        - Quality assurance with overlap verification
+        
+        Args:
+            image_id: COCO image ID
+            W, H: Image dimensions
+            min_shapes, max_shapes: Range of background shapes to generate
+            
+        Returns:
+            PIL Image with background mask (255 = background regions to inpaint)
+        """
+        import random
+        
+        # Step 1: Multi-level vessel exclusion
+        vessel_mask = self._make_mask_from_annotations(image_id, W, H)
+        vessel_np = np.array(vessel_mask, dtype=np.uint8)
+        
+        # Create multiple exclusion levels
+        base_exclusion = vessel_np  # Original vessels
+        
+        # Level 1: Close proximity (strict no-go zone)
+        strict_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
+        strict_exclusion = cv2.dilate(vessel_np, strict_kernel, iterations=2)
+        
+        # Level 2: Moderate buffer (caution zone)  
+        moderate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        moderate_exclusion = cv2.dilate(vessel_np, moderate_kernel, iterations=1)
+        
+        # Step 2: Identify safe background corridors
+        safe_zones = self._identify_safe_background_corridors(strict_exclusion, W, H)
+        
+        # Step 3: Generate background shapes with intelligent placement
+        bg_mask = np.zeros((H, W), dtype=np.uint8)
+        num_shapes = random.randint(min_shapes, max_shapes)
+        successful_shapes = 0
+        max_attempts_per_shape = 80
+        
+        for shape_idx in range(num_shapes):
+            shape_placed = False
+            
+            for attempt in range(max_attempts_per_shape):
+                # Try different shape types with size adaptation
+                shape_type = random.choice(['circle', 'rectangle', 'ellipse', 'blob'])
+                
+                if shape_type == 'circle':
+                    success, temp_mask = self._generate_safe_circle(
+                        W, H, strict_exclusion, moderate_exclusion, safe_zones
+                    )
+                elif shape_type == 'rectangle':
+                    success, temp_mask = self._generate_safe_rectangle(
+                        W, H, strict_exclusion, moderate_exclusion, safe_zones
+                    )
+                elif shape_type == 'ellipse':
+                    success, temp_mask = self._generate_safe_ellipse(
+                        W, H, strict_exclusion, moderate_exclusion, safe_zones
+                    )
+                else:  # blob
+                    success, temp_mask = self._generate_safe_blob(
+                        W, H, strict_exclusion, moderate_exclusion, safe_zones
+                    )
+                
+                if success:
+                    # Verify ultra-strict overlap control (< 1% with original vessels)
+                    overlap_pixels = np.sum((temp_mask > 0) & (base_exclusion > 0))
+                    shape_pixels = np.sum(temp_mask > 0)
+                    
+                    if shape_pixels > 0:
+                        overlap_ratio = overlap_pixels / shape_pixels
+                        
+                        if overlap_ratio < 0.01:  # Ultra-strict: < 1% vessel overlap
+                            bg_mask = np.maximum(bg_mask, temp_mask)
+                            successful_shapes += 1
+                            shape_placed = True
+                            break
+            
+            if not shape_placed:
+                # Fallback: try smaller, safer shape in identified safe zones
+                fallback_success = self._place_fallback_safe_shape(
+                    bg_mask, W, H, strict_exclusion, safe_zones
+                )
+                if fallback_success:
+                    successful_shapes += 1
+        
+        # Step 4: Quality assurance and coverage optimization
+        bg_coverage = np.sum(bg_mask > 0) / (W * H)
+        
+        # Ensure minimum coverage (at least 3% for meaningful training)
+        if bg_coverage < 0.03:
+            self._add_emergency_background_coverage(bg_mask, W, H, strict_exclusion, safe_zones)
+        
+        # Ensure maximum coverage (no more than 20% to avoid over-inpainting)
+        elif bg_coverage > 0.20:
+            bg_mask = self._reduce_background_coverage(bg_mask, target_ratio=0.18)
+        
+        return Image.fromarray(bg_mask, mode='L'), successful_shapes
+    
+    def _identify_safe_background_corridors(self, exclusion_mask, W, H):
+        """Identify large vessel-free regions suitable for background placement."""
+        # Invert exclusion mask to find safe areas
+        safe_areas = (exclusion_mask == 0).astype(np.uint8) * 255
+        
+        # Find contours of safe areas
+        contours, _ = cv2.findContours(safe_areas, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Filter for sufficiently large safe zones (min 500 pixels)
+        large_safe_zones = []
+        min_area = 500
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area >= min_area:
+                # Create mask for this safe zone
+                zone_mask = np.zeros((H, W), dtype=np.uint8)
+                cv2.drawContours(zone_mask, [contour], -1, 255, -1)
+                large_safe_zones.append({
+                    'mask': zone_mask,
+                    'area': area,
+                    'contour': contour
+                })
+        
+        return large_safe_zones
+    
+    def _generate_safe_circle(self, W, H, strict_exclusion, moderate_exclusion, safe_zones):
+        """Generate circle in safe background regions."""
+        if not safe_zones:
+            return False, None
+            
+        # Pick a random safe zone
+        zone = random.choice(safe_zones)
+        zone_mask = zone['mask']
+        
+        # Find valid points in this zone  
+        valid_points = np.where(zone_mask > 0)
+        if len(valid_points[0]) == 0:
+            return False, None
+        
+        # Try multiple placements
+        for _ in range(10):
+            idx = random.randint(0, len(valid_points[0]) - 1)
+            center_y, center_x = valid_points[0][idx], valid_points[1][idx]
+            
+            # Adaptive radius based on distance to nearest vessel
+            max_radius = min(W, H) // 12
+            min_radius = 6
+            
+            # Check distance to vessels to determine safe radius
+            distances = []
+            for dy in range(-max_radius, max_radius + 1):
+                for dx in range(-max_radius, max_radius + 1):
+                    y, x = center_y + dy, center_x + dx
+                    if 0 <= y < H and 0 <= x < W:
+                        if strict_exclusion[y, x] > 0:
+                            distances.append(np.sqrt(dx*dx + dy*dy))
+            
+            if distances:
+                safe_radius = max(min_radius, min(max_radius, int(min(distances) * 0.7)))
+            else:
+                safe_radius = max_radius
+            
+            # Generate circle
+            temp_mask = np.zeros((H, W), dtype=np.uint8)
+            cv2.circle(temp_mask, (center_x, center_y), safe_radius, 255, -1)
+            
+            # Verify it stays within safe zone
+            overlap_with_zone = np.sum((temp_mask > 0) & (zone_mask > 0))
+            total_circle = np.sum(temp_mask > 0)
+            
+            if total_circle > 0 and (overlap_with_zone / total_circle) > 0.8:
+                return True, temp_mask
+                
+        return False, None
+    
+    def _generate_safe_rectangle(self, W, H, strict_exclusion, moderate_exclusion, safe_zones):
+        """Generate rectangle in safe background regions."""
+        if not safe_zones:
+            return False, None
+            
+        zone = random.choice(safe_zones)
+        zone_mask = zone['mask']
+        
+        # Find valid rectangular regions
+        for _ in range(15):
+            # Random size
+            width = random.randint(12, min(W, H) // 8)
+            height = random.randint(12, min(W, H) // 8)
+            
+            # Random position within zone
+            valid_points = np.where(zone_mask > 0)
+            if len(valid_points[0]) == 0:
+                continue
+                
+            idx = random.randint(0, len(valid_points[0]) - 1)
+            center_y, center_x = valid_points[0][idx], valid_points[1][idx]
+            
+            x1 = max(0, center_x - width // 2)
+            y1 = max(0, center_y - height // 2)
+            x2 = min(W, x1 + width)
+            y2 = min(H, y1 + height)
+            
+            temp_mask = np.zeros((H, W), dtype=np.uint8)
+            cv2.rectangle(temp_mask, (x1, y1), (x2, y2), 255, -1)
+            
+            # Verify safe placement
+            overlap_with_zone = np.sum((temp_mask > 0) & (zone_mask > 0))
+            total_rect = np.sum(temp_mask > 0)
+            
+            if total_rect > 0 and (overlap_with_zone / total_rect) > 0.7:
+                return True, temp_mask
+                
+        return False, None
+    
+    def _generate_safe_ellipse(self, W, H, strict_exclusion, moderate_exclusion, safe_zones):
+        """Generate ellipse in safe background regions."""
+        if not safe_zones:
+            return False, None
+            
+        zone = random.choice(safe_zones)
+        zone_mask = zone['mask']
+        
+        for _ in range(15):
+            valid_points = np.where(zone_mask > 0)
+            if len(valid_points[0]) == 0:
+                continue
+                
+            idx = random.randint(0, len(valid_points[0]) - 1)
+            center_y, center_x = valid_points[0][idx], valid_points[1][idx]
+            
+            axes_x = random.randint(8, min(W, H) // 12)
+            axes_y = random.randint(8, min(W, H) // 12)
+            angle = random.randint(0, 180)
+            
+            temp_mask = np.zeros((H, W), dtype=np.uint8)
+            cv2.ellipse(temp_mask, (center_x, center_y), (axes_x, axes_y), angle, 0, 360, 255, -1)
+            
+            overlap_with_zone = np.sum((temp_mask > 0) & (zone_mask > 0))
+            total_ellipse = np.sum(temp_mask > 0)
+            
+            if total_ellipse > 0 and (overlap_with_zone / total_ellipse) > 0.7:
+                return True, temp_mask
+                
+        return False, None
+    
+    def _generate_safe_blob(self, W, H, strict_exclusion, moderate_exclusion, safe_zones):
+        """Generate irregular blob in safe background regions."""
+        if not safe_zones:
+            return False, None
+            
+        zone = random.choice(safe_zones)
+        zone_mask = zone['mask']
+        
+        for _ in range(10):
+            valid_points = np.where(zone_mask > 0)
+            if len(valid_points[0]) == 0:
+                continue
+                
+            idx = random.randint(0, len(valid_points[0]) - 1)
+            center_y, center_x = valid_points[0][idx], valid_points[1][idx]
+            
+            # Create irregular blob using multiple overlapping circles
+            temp_mask = np.zeros((H, W), dtype=np.uint8)
+            num_circles = random.randint(3, 6)
+            
+            for _ in range(num_circles):
+                offset_x = random.randint(-15, 15)
+                offset_y = random.randint(-15, 15)
+                radius = random.randint(8, 18)
+                
+                blob_x = np.clip(center_x + offset_x, radius, W - radius)
+                blob_y = np.clip(center_y + offset_y, radius, H - radius)
+                
+                cv2.circle(temp_mask, (blob_x, blob_y), radius, 255, -1)
+            
+            overlap_with_zone = np.sum((temp_mask > 0) & (zone_mask > 0))
+            total_blob = np.sum(temp_mask > 0)
+            
+            if total_blob > 0 and (overlap_with_zone / total_blob) > 0.6:
+                return True, temp_mask
+                
+        return False, None
+    
+    def _place_fallback_safe_shape(self, current_mask, W, H, strict_exclusion, safe_zones):
+        """Place a small, safe shape as fallback when other methods fail."""
+        if not safe_zones:
+            return False
+            
+        # Use largest safe zone for fallback
+        largest_zone = max(safe_zones, key=lambda z: z['area'])
+        zone_mask = largest_zone['mask']
+        
+        valid_points = np.where(zone_mask > 0)
+        if len(valid_points[0]) == 0:
+            return False
+            
+        # Place small circle in center of largest safe zone
+        center_idx = len(valid_points[0]) // 2
+        center_y, center_x = valid_points[0][center_idx], valid_points[1][center_idx]
+        
+        small_radius = 8  # Conservative small shape
+        cv2.circle(current_mask, (center_x, center_y), small_radius, 255, -1)
+        return True
+    
+    def _add_emergency_background_coverage(self, current_mask, W, H, strict_exclusion, safe_zones):
+        """Add minimal background coverage if we don't have enough."""
+        if safe_zones:
+            largest_zone = max(safe_zones, key=lambda z: z['area'])
+            zone_mask = largest_zone['mask']
+            
+            # Add one guaranteed safe rectangle in largest zone
+            valid_points = np.where(zone_mask > 0)
+            if len(valid_points[0]) > 0:
+                center_idx = len(valid_points[0]) // 2
+                center_y, center_x = valid_points[0][center_idx], valid_points[1][center_idx]
+                
+                # Small emergency rectangle
+                rect_size = min(20, min(W, H) // 15)
+                x1 = max(0, center_x - rect_size // 2)
+                y1 = max(0, center_y - rect_size // 2)  
+                x2 = min(W, x1 + rect_size)
+                y2 = min(H, y1 + rect_size)
+                
+                cv2.rectangle(current_mask, (x1, y1), (x2, y2), 255, -1)
+    
+    def _reduce_background_coverage(self, mask, target_ratio=0.18):
+        """Reduce background coverage if it's too extensive."""
+        # Use erosion to reduce mask coverage
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        reduced_mask = cv2.erode(mask, kernel, iterations=1)
+        return reduced_mask
 
     def _generate_random_mask(self, base_mask, W, H):
         """
@@ -325,23 +756,105 @@ class ArcadeDataset(Dataset):
         
         return random_mask
 
-    def _extract_random_patch(self, img, mask, patch_size, min_coverage=0.01, max_retries=5):
-        """Extract a patch with foreground bias to ensure mask coverage."""
+    def _extract_safe_patch(self, img, mask, patch_size, min_coverage=0.01, max_retries=20):
+        """
+        Extract a safe patch that:
+        1. Fits completely within image boundaries (no cropping)
+        2. For background training: avoids vessel regions but targets background masks
+        3. For vessel training: targets vessel regions
+        
+        Args:
+            img: Input image (H, W)
+            mask: Target mask (H, W) - vessels for vessel training, background for bg training
+            patch_size: Size of square patch to extract
+            min_coverage: Minimum mask coverage ratio for patch acceptance
+            max_retries: Maximum attempts before fallback to random patch
+            
+        Returns:
+            img_patch, mask_patch: Extracted patches
+        """
         H, W = img.shape
         
-        # Ensure patch fits within image
+        # Critical: Ensure patch fits completely within image (no padding/cropping)
         if H < patch_size or W < patch_size:
-            # Pad image if smaller than patch size
-            pad_h = max(0, patch_size - H)
-            pad_w = max(0, patch_size - W)
-            img = np.pad(img, ((0, pad_h), (0, pad_w)), mode='constant', constant_values=0)
-            mask = np.pad(mask, ((0, pad_h), (0, pad_w)), mode='constant', constant_values=0)
-            H, W = img.shape
+            raise ValueError(
+                f"Image too small ({W}x{H}) for patch size {patch_size}x{patch_size}. "
+                f"Minimum image size required: {patch_size}x{patch_size}"
+            )
         
+        # Calculate valid coordinate ranges (patch must fit completely)
         max_y = H - patch_size
         max_x = W - patch_size
         
-        # Check if we should use foreground-biased sampling
+        # For background training, we want patches with background masks but avoiding vessels
+        if self.background_training:
+            return self._extract_background_focused_patch(
+                img, mask, patch_size, max_x, max_y, min_coverage, max_retries
+            )
+        else:
+            # Traditional vessel-focused patch extraction
+            return self._extract_vessel_focused_patch(
+                img, mask, patch_size, max_x, max_y, min_coverage, max_retries
+            )
+    
+    def _extract_background_focused_patch(self, img, mask, patch_size, max_x, max_y, min_coverage, max_retries):
+        """Extract patch focused on background regions (avoiding vessels)."""
+        background_pixels = np.where(mask > 0)  # mask contains background regions to inpaint
+        
+        # Strategy: Try background-centered patches first, then random
+        use_background_bias = (
+            np.random.random() < self.foreground_prob and  # Use same parameter but for background
+            len(background_pixels[0]) > 0
+        )
+        
+        if use_background_bias:
+            # Try background-biased sampling with retries
+            for retry in range(max_retries):
+                # Pick a random background pixel as center
+                idx = np.random.randint(len(background_pixels[0]))
+                center_y, center_x = background_pixels[0][idx], background_pixels[1][idx]
+                
+                # Add controlled jitter around the center
+                jitter_range = patch_size // 6  # Smaller jitter for safer positioning
+                jitter_y = np.random.randint(-jitter_range, jitter_range + 1)
+                jitter_x = np.random.randint(-jitter_range, jitter_range + 1)
+                
+                # Calculate top-left corner ensuring patch fits completely
+                y = center_y - patch_size // 2 + jitter_y
+                x = center_x - patch_size // 2 + jitter_x
+                
+                # CRITICAL: Clamp to ensure patch stays within bounds
+                y = np.clip(y, 0, max_y)
+                x = np.clip(x, 0, max_x)
+                
+                # Extract patch (guaranteed to fit)
+                img_patch = img[y:y+patch_size, x:x+patch_size]
+                mask_patch = mask[y:y+patch_size, x:x+patch_size]
+                
+                # Verify patch dimensions (safety check)
+                if img_patch.shape != (patch_size, patch_size):
+                    continue
+                
+                # Check background coverage
+                coverage = np.sum(mask_patch > 0) / (patch_size * patch_size)
+                if coverage >= min_coverage or retry == max_retries - 1:
+                    return img_patch, mask_patch
+        
+        # Fallback: safe random sampling (guaranteed to fit within image)
+        y = np.random.randint(0, max_y + 1)
+        x = np.random.randint(0, max_x + 1)
+        
+        img_patch = img[y:y+patch_size, x:x+patch_size]
+        mask_patch = mask[y:y+patch_size, x:x+patch_size]
+        
+        # Final safety check
+        assert img_patch.shape == (patch_size, patch_size), f"Invalid patch shape: {img_patch.shape}"
+        assert mask_patch.shape == (patch_size, patch_size), f"Invalid mask shape: {mask_patch.shape}"
+        
+        return img_patch, mask_patch
+    
+    def _extract_vessel_focused_patch(self, img, mask, patch_size, max_x, max_y, min_coverage, max_retries):
+        """Extract patch focused on vessel regions (traditional approach)."""
         foreground_pixels = np.where(mask > 0)
         use_foreground_bias = (
             np.random.random() < self.foreground_prob and 
@@ -355,16 +868,16 @@ class ArcadeDataset(Dataset):
                 idx = np.random.randint(len(foreground_pixels[0]))
                 center_y, center_x = foreground_pixels[0][idx], foreground_pixels[1][idx]
                 
-                # Add jitter around the center (±patch_size//4)
+                # Add jitter around the center
                 jitter_range = patch_size // 4
                 jitter_y = np.random.randint(-jitter_range, jitter_range + 1)
                 jitter_x = np.random.randint(-jitter_range, jitter_range + 1)
                 
-                # Calculate top-left corner (center - patch_size//2 + jitter)
+                # Calculate top-left corner
                 y = center_y - patch_size // 2 + jitter_y
                 x = center_x - patch_size // 2 + jitter_x
                 
-                # Clamp to valid range
+                # CRITICAL: Clamp to ensure patch stays within bounds
                 y = np.clip(y, 0, max_y)
                 x = np.clip(x, 0, max_x)
                 
@@ -372,27 +885,31 @@ class ArcadeDataset(Dataset):
                 img_patch = img[y:y+patch_size, x:x+patch_size]
                 mask_patch = mask[y:y+patch_size, x:x+patch_size]
                 
+                # Verify patch dimensions
+                if img_patch.shape != (patch_size, patch_size):
+                    continue
+                
                 # Check coverage
                 coverage = np.sum(mask_patch > 0) / (patch_size * patch_size)
                 if coverage >= min_coverage or retry == max_retries - 1:
                     return img_patch, mask_patch
         
-        # Fallback: random sampling (either by choice or if foreground bias failed)
+        # Fallback: safe random sampling
         y = np.random.randint(0, max_y + 1)
         x = np.random.randint(0, max_x + 1)
         
         img_patch = img[y:y+patch_size, x:x+patch_size]
         mask_patch = mask[y:y+patch_size, x:x+patch_size]
         
+        assert img_patch.shape == (patch_size, patch_size)
+        assert mask_patch.shape == (patch_size, patch_size)
+        
         return img_patch, mask_patch
 
     def __getitem__(self, idx):
-        if self.patch_mode:
-            # In patch mode, map idx to (image_idx, patch_idx)
-            image_idx = idx // self.patches_per_image
-            image_id = self.image_ids[image_idx]
-        else:
-            image_id = self.image_ids[idx]
+        # Map idx to (image_idx, patch_idx)
+        image_idx = idx // self.patches_per_image
+        image_id = self.image_ids[image_idx]
         
         info     = self.id_to_info[image_id]
         W, H     = info['width'], info['height']
@@ -411,29 +928,26 @@ class ArcadeDataset(Dataset):
                 raise FileNotFoundError(f"Mask not found: {mask_path}")
             mask_np = mask_img.astype(np.float32) / 255.0
         else:
-            # Generate base mask from COCO annotations
-            base_mask_pil = self._make_mask_from_annotations(image_id, W, H)
-            
-            if self.random_masks:
-                # Generate random mask with padding and additional shapes
-                mask_pil = self._generate_random_mask(base_mask_pil, W, H)
+            # Choose mask generation strategy based on training mode
+            if self.background_training:
+                # CORRECT: Generate background masks (avoiding vessels)
+                mask_pil = self._make_background_mask_from_annotations(image_id, W, H)
             else:
-                # Use original vessel mask
-                mask_pil = base_mask_pil
+                # INFERENCE: Generate vessel masks (for vessel removal)
+                base_mask_pil = self._make_mask_from_annotations(image_id, W, H)
+                
+                if self.random_masks:
+                    # Generate random mask with padding and additional shapes
+                    mask_pil = self._generate_random_mask(base_mask_pil, W, H)
+                else:
+                    # Use original vessel mask
+                    mask_pil = base_mask_pil
             
             mask_np = np.array(mask_pil, dtype=np.float32) / 255.0
 
-        if self.patch_mode:
-            # Extract random patch instead of resizing
-            img_patch, mask_patch = self._extract_random_patch(img, mask_np, self.image_size)
-            img_norm = (img_patch.astype(np.float32) / 255.0) * 2.0 - 1.0
-        else:
-            # Original behavior: resize
-            img  = cv2.resize(img,     (self.image_size, self.image_size),
-                              interpolation=cv2.INTER_LINEAR)
-            mask_patch = cv2.resize(mask_np, (self.image_size, self.image_size),
-                              interpolation=cv2.INTER_NEAREST)
-            img_norm = (img.astype(np.float32) / 255.0) * 2.0 - 1.0
+        # Extract random patch
+        img_patch, mask_patch = self._extract_safe_patch(img, mask_np, self.image_size)
+        img_norm = (img_patch.astype(np.float32) / 255.0) * 2.0 - 1.0
 
         # Normalise image to [-1, 1]
         img_t    = torch.from_numpy(img_norm).unsqueeze(0)
@@ -539,11 +1053,12 @@ def rotate_checkpoints(output_dir, keep_top_k=3):
 # ---------------------------------------------------------------------------
 def train_model(train_img, train_ann, val_img, val_ann, epochs=10, batch_size=4, 
                 lr=1e-4, input_size=64, device='cpu', output_dir='checkpoints',
-                patch_mode=False, patches_per_image=4, foreground_prob=0.75, 
+                patches_per_image=4, foreground_prob=0.75, 
                 max_shapes=5, smoke_test=False, smoke_size=10, save_every=10,
                 train_mask=None, val_mask=None, ckpt=None, num_workers=2,
                 keep_checkpoints=3, random_masks=False, mask_padding=10,
-                ssim_weight=0.5, mask_weight=6.0, valid_weight=1.0, epoch_callback=None):
+                ssim_weight=0.5, mask_weight=6.0, valid_weight=1.0, epoch_callback=None,
+                background_training=True):
     """
     Train CMT model - notebook-friendly version
     
@@ -591,14 +1106,16 @@ def train_model(train_img, train_ann, val_img, val_ann, epochs=10, batch_size=4,
     # ---- Datasets ----
     train_dataset = ArcadeDataset(train_img, train_ann, input_size,
                                   mask_dir=train_mask, random_masks=random_masks,
-                                  mask_padding=mask_padding, patch_mode=patch_mode, 
+                                  mask_padding=mask_padding,
                                   patches_per_image=patches_per_image,
-                                  foreground_prob=foreground_prob, max_shapes=max_shapes)
+                                  foreground_prob=foreground_prob, max_shapes=max_shapes,
+                                  background_training=background_training)
     
     val_dataset = ArcadeDataset(val_img, val_ann, input_size,
                                 mask_dir=val_mask, random_masks=False,
-                                patch_mode=patch_mode, patches_per_image=patches_per_image,
-                                foreground_prob=foreground_prob, max_shapes=max_shapes)
+                                patches_per_image=patches_per_image,
+                                foreground_prob=foreground_prob, max_shapes=max_shapes,
+                                background_training=background_training)
 
     # Smoke test override
     if smoke_test:
@@ -800,10 +1317,8 @@ def main():
                         help='Weight for L1 loss on masked regions')
     parser.add_argument('--valid_weight', type=float, default=1.0,
                         help='Weight for L1 loss on valid regions')
-    parser.add_argument('--patch_mode', action='store_true',
-                        help='Extract random patches instead of resizing entire image')
     parser.add_argument('--patches_per_image', type=int, default=4,
-                        help='Number of patches to extract per image when using patch_mode')
+                        help='Number of patches to extract per image')
     parser.add_argument('--foreground_prob', type=float, default=0.75,
                         help='Probability of biasing patch sampling toward foreground (mask) pixels')
     parser.add_argument('--max_shapes', type=int, default=5,
@@ -816,11 +1331,11 @@ def main():
     # ---- Datasets ----
     train_dataset = ArcadeDataset(args.train_img, args.train_ann, args.input_size,
                                   mask_dir=args.train_mask, random_masks=args.random_masks,
-                                  mask_padding=args.mask_padding, patch_mode=args.patch_mode,
+                                  mask_padding=args.mask_padding,
                                   patches_per_image=args.patches_per_image,
                                   foreground_prob=args.foreground_prob, max_shapes=args.max_shapes)
     val_dataset   = ArcadeDataset(args.val_img,   args.val_ann,   args.input_size,
-                                  mask_dir=args.val_mask, patch_mode=args.patch_mode,
+                                  mask_dir=args.val_mask,
                                   patches_per_image=args.patches_per_image,
                                   foreground_prob=args.foreground_prob, max_shapes=args.max_shapes)
 
@@ -841,13 +1356,10 @@ def main():
     val_loader   = DataLoader(val_dataset,   batch_size=args.batch_size,
                               shuffle=False, num_workers=args.num_workers)
 
-    if args.patch_mode:
-        base_train_imgs = len(train_dataset.image_ids)
-        base_val_imgs = len(val_dataset.image_ids)
-        print(f"Patch mode enabled: {args.patches_per_image} patches per image")
-        print(f"Train: {base_train_imgs} images → {len(train_dataset)} patches | Val: {base_val_imgs} images → {len(val_dataset)} patches")
-    else:
-        print(f"Train: {len(train_dataset)} images | Val: {len(val_dataset)} images")
+    base_train_imgs = len(train_dataset.image_ids)
+    base_val_imgs = len(val_dataset.image_ids)
+    print(f"Patch mode enabled: {args.patches_per_image} patches per image")
+    print(f"Train: {base_train_imgs} images → {len(train_dataset)} patches | Val: {base_val_imgs} images → {len(val_dataset)} patches")
 
     # ---- Model ----
     model = Inpaint(input_size=args.input_size).to(device)
@@ -1035,7 +1547,6 @@ def train_model(
     # Data augmentation
     random_masks=False,
     mask_padding=10,
-    patch_mode=False,
     patches_per_image=4,
     foreground_prob=0.75,
     max_shapes=5,
@@ -1088,11 +1599,11 @@ def train_model(
     # ---- Datasets ----
     train_dataset = ArcadeDataset(train_img, train_ann, input_size,
                                   mask_dir=train_mask, random_masks=random_masks,
-                                  mask_padding=mask_padding, patch_mode=patch_mode,
+                                  mask_padding=mask_padding,
                                   patches_per_image=patches_per_image,
                                   foreground_prob=foreground_prob, max_shapes=max_shapes)
     val_dataset   = ArcadeDataset(val_img, val_ann, input_size,
-                                  mask_dir=val_mask, patch_mode=patch_mode,
+                                  mask_dir=val_mask,
                                   patches_per_image=patches_per_image,
                                   foreground_prob=foreground_prob, max_shapes=max_shapes)
 
@@ -1113,13 +1624,10 @@ def train_model(
     val_loader   = DataLoader(val_dataset,   batch_size=batch_size,
                               shuffle=False, num_workers=num_workers)
 
-    if patch_mode:
-        base_train_imgs = len(train_dataset.image_ids)
-        base_val_imgs = len(val_dataset.image_ids)
-        print(f"Patch mode enabled: {patches_per_image} patches per image")
-        print(f"Train: {base_train_imgs} images → {len(train_dataset)} patches | Val: {base_val_imgs} images → {len(val_dataset)} patches")
-    else:
-        print(f"Train: {len(train_dataset)} images | Val: {len(val_dataset)} images")
+    base_train_imgs = len(train_dataset.image_ids)
+    base_val_imgs = len(val_dataset.image_ids)
+    print(f"Patch mode enabled: {patches_per_image} patches per image")
+    print(f"Train: {base_train_imgs} images → {len(train_dataset)} patches | Val: {base_val_imgs} images → {len(val_dataset)} patches")
 
     # ---- Model ----
     model = Inpaint(input_size=input_size).to(device)
