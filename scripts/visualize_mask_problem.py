@@ -68,26 +68,34 @@ class MaskProblemVisualizer:
                         draw.polygon(xy, fill=255)
         return mask
     
-    def generate_background_mask(self, vessel_mask, width, height, safety_margin=8, num_shapes=5):
+    def generate_background_mask(self, vessel_mask, width, height, safety_margin=15, num_shapes=12, max_coverage=0.30):
         """Generate safe background mask avoiding vessels (BLAU)."""
         vessel_np = np.array(vessel_mask, dtype=np.uint8)
         
-        # Create vessel exclusion zone with safety margin
-        kernel_size = max(3, safety_margin * 2 + 1)
+        # Create vessel exclusion zone with enhanced safety margin
+        kernel_size = max(5, safety_margin * 2 + 1)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        vessel_exclusion = cv2.dilate(vessel_np, kernel, iterations=1)
+        vessel_exclusion = cv2.dilate(vessel_np, kernel, iterations=2)  # Double iterations for larger margin
         
-        # Generate random background patches
+        # Generate random background patches with coverage control
         bg_mask = np.zeros((height, width), dtype=np.uint8)
         successful_shapes = 0
         max_attempts = 100
+        total_pixels = width * height
+        max_mask_pixels = int(total_pixels * max_coverage)
         
         for shape_idx in range(num_shapes):
+            # Check current coverage before adding new shape
+            current_mask_pixels = np.sum(bg_mask > 0)
+            if current_mask_pixels >= max_mask_pixels:
+                print(f"  ⚠️ Reached max coverage limit ({max_coverage:.0%}) with {successful_shapes} shapes")
+                break
+                
             for attempt in range(max_attempts):
-                shape_type = random.choice(['circle', 'rectangle', 'ellipse'])
+                shape_type = random.choice(['circle', 'rectangle', 'ellipse', 'triangle', 'hexagon', 'blob', 'spaghetti', 'cross', 'star', 'crescent', 'line', 'curve'])
                 
                 if shape_type == 'circle':
-                    radius = random.randint(8, min(width, height) // 8)
+                    radius = random.randint(8, min(width, height) // 8)  # Smaller circles for better context
                     center_x = random.randint(radius, width - radius)
                     center_y = random.randint(radius, height - radius)
                     
@@ -95,7 +103,7 @@ class MaskProblemVisualizer:
                     cv2.circle(temp_mask, (center_x, center_y), radius, 255, -1)
                     
                 elif shape_type == 'rectangle':
-                    w = random.randint(10, min(width, height) // 6)
+                    w = random.randint(10, min(width, height) // 6)  # Smaller rectangles
                     h = random.randint(10, min(width, height) // 6)
                     x = random.randint(0, width - w)
                     y = random.randint(0, height - h)
@@ -103,10 +111,10 @@ class MaskProblemVisualizer:
                     temp_mask = np.zeros((height, width), dtype=np.uint8)
                     cv2.rectangle(temp_mask, (x, y), (x + w, y + h), 255, -1)
                     
-                else:  # ellipse
+                elif shape_type == 'ellipse':
                     center_x = random.randint(width // 6, 5 * width // 6)
                     center_y = random.randint(height // 6, 5 * height // 6)
-                    axes_x = random.randint(8, min(width, height) // 10)
+                    axes_x = random.randint(8, min(width, height) // 10)  # Smaller ellipses
                     axes_y = random.randint(8, min(width, height) // 10)
                     angle = random.randint(0, 180)
                     
@@ -114,22 +122,200 @@ class MaskProblemVisualizer:
                     cv2.ellipse(temp_mask, (center_x, center_y), (axes_x, axes_y), 
                                angle, 0, 360, 255, -1)
                 
-                # Check overlap with vessel exclusion zone
+                elif shape_type == 'triangle':
+                    # Random triangle
+                    center_x = random.randint(width // 6, 5 * width // 6)
+                    center_y = random.randint(height // 6, 5 * height // 6)
+                    size = random.randint(8, min(width, height) // 8)  # Smaller triangles
+                    
+                    points = np.array([
+                        [center_x, center_y - size],
+                        [center_x - size, center_y + size//2],
+                        [center_x + size, center_y + size//2]
+                    ], dtype=np.int32)
+                    
+                    temp_mask = np.zeros((height, width), dtype=np.uint8)
+                    cv2.fillPoly(temp_mask, [points], 255)
+                
+                elif shape_type == 'hexagon':
+                    # Random hexagon
+                    center_x = random.randint(width // 6, 5 * width // 6)
+                    center_y = random.randint(height // 6, 5 * height // 6)
+                    size = random.randint(6, min(width, height) // 12)  # Smaller hexagons
+                    
+                    # Create hexagon points
+                    angles = np.linspace(0, 2*np.pi, 7)[:-1]  # 6 points
+                    points = []
+                    for angle in angles:
+                        x = int(center_x + size * np.cos(angle))
+                        y = int(center_y + size * np.sin(angle))
+                        points.append([x, y])
+                    
+                    points = np.array(points, dtype=np.int32)
+                    temp_mask = np.zeros((height, width), dtype=np.uint8)
+                    cv2.fillPoly(temp_mask, [points], 255)
+                
+                elif shape_type == 'blob':  # blob - irregular shape
+                    center_x = random.randint(width // 6, 5 * width // 6)
+                    center_y = random.randint(height // 6, 5 * height // 6)
+                    base_size = random.randint(6, min(width, height) // 12)  # Smaller blobs
+                    
+                    # Create irregular blob with random points
+                    num_points = random.randint(6, 10)
+                    angles = np.linspace(0, 2*np.pi, num_points+1)[:-1]
+                    points = []
+                    for angle in angles:
+                        # Add randomness to radius for irregular shape
+                        radius = base_size * random.uniform(0.5, 1.5)
+                        x = int(center_x + radius * np.cos(angle))
+                        y = int(center_y + radius * np.sin(angle))
+                        points.append([x, y])
+                    
+                    points = np.array(points, dtype=np.int32)
+                    temp_mask = np.zeros((height, width), dtype=np.uint8)
+                    cv2.fillPoly(temp_mask, [points], 255)
+                
+                elif shape_type == 'spaghetti':
+                    # Random curvy line (spaghetti-like)
+                    start_x = random.randint(width // 6, 5 * width // 6)
+                    start_y = random.randint(height // 6, 5 * height // 6)
+                    thickness = random.randint(3, 8)
+                    
+                    temp_mask = np.zeros((height, width), dtype=np.uint8)
+                    # Create curved path with multiple segments
+                    points = [(start_x, start_y)]
+                    current_x, current_y = start_x, start_y
+                    
+                    num_segments = random.randint(5, 12)
+                    for _ in range(num_segments):
+                        # Random direction change
+                        angle = random.uniform(0, 2*np.pi)
+                        step = random.randint(8, 20)
+                        new_x = int(current_x + step * np.cos(angle))
+                        new_y = int(current_y + step * np.sin(angle))
+                        
+                        # Keep within bounds
+                        new_x = max(thickness, min(width - thickness, new_x))
+                        new_y = max(thickness, min(height - thickness, new_y))
+                        
+                        # Draw line segment
+                        cv2.line(temp_mask, (current_x, current_y), (new_x, new_y), 255, thickness)
+                        current_x, current_y = new_x, new_y
+                
+                elif shape_type == 'cross':
+                    # Cross shape
+                    center_x = random.randint(width // 6, 5 * width // 6)
+                    center_y = random.randint(height // 6, 5 * height // 6)
+                    arm_length = random.randint(10, min(width, height) // 8)
+                    thickness = random.randint(4, 8)
+                    
+                    temp_mask = np.zeros((height, width), dtype=np.uint8)
+                    # Horizontal bar
+                    cv2.rectangle(temp_mask, 
+                                (center_x - arm_length, center_y - thickness//2),
+                                (center_x + arm_length, center_y + thickness//2), 255, -1)
+                    # Vertical bar
+                    cv2.rectangle(temp_mask, 
+                                (center_x - thickness//2, center_y - arm_length),
+                                (center_x + thickness//2, center_y + arm_length), 255, -1)
+                
+                elif shape_type == 'star':
+                    # Star shape (5-pointed)
+                    center_x = random.randint(width // 6, 5 * width // 6)
+                    center_y = random.randint(height // 6, 5 * height // 6)
+                    outer_radius = random.randint(8, min(width, height) // 10)
+                    inner_radius = outer_radius // 2
+                    
+                    temp_mask = np.zeros((height, width), dtype=np.uint8)
+                    points = []
+                    for i in range(10):  # 5 outer + 5 inner points
+                        angle = i * np.pi / 5
+                        radius = outer_radius if i % 2 == 0 else inner_radius
+                        x = int(center_x + radius * np.cos(angle))
+                        y = int(center_y + radius * np.sin(angle))
+                        points.append([x, y])
+                    
+                    points = np.array(points, dtype=np.int32)
+                    cv2.fillPoly(temp_mask, [points], 255)
+                
+                elif shape_type == 'crescent':
+                    # Crescent moon shape
+                    center_x = random.randint(width // 6, 5 * width // 6)
+                    center_y = random.randint(height // 6, 5 * height // 6)
+                    radius = random.randint(10, min(width, height) // 8)
+                    
+                    temp_mask = np.zeros((height, width), dtype=np.uint8)
+                    # Draw outer circle
+                    cv2.circle(temp_mask, (center_x, center_y), radius, 255, -1)
+                    # Remove inner circle to create crescent
+                    inner_offset = radius // 3
+                    cv2.circle(temp_mask, (center_x + inner_offset, center_y), radius - 2, 0, -1)
+                
+                elif shape_type == 'line':
+                    # Random line
+                    start_x = random.randint(0, width)
+                    start_y = random.randint(0, height)
+                    end_x = random.randint(0, width)
+                    end_y = random.randint(0, height)
+                    thickness = random.randint(3, 10)
+                    
+                    temp_mask = np.zeros((height, width), dtype=np.uint8)
+                    cv2.line(temp_mask, (start_x, start_y), (end_x, end_y), 255, thickness)
+                
+                else:  # curve - bezier-like curve
+                    # Random smooth curve
+                    start_x = random.randint(width // 6, 5 * width // 6)
+                    start_y = random.randint(height // 6, 5 * height // 6)
+                    end_x = random.randint(width // 6, 5 * width // 6)
+                    end_y = random.randint(height // 6, 5 * height // 6)
+                    control_x = random.randint(width // 6, 5 * width // 6)
+                    control_y = random.randint(height // 6, 5 * height // 6)
+                    thickness = random.randint(3, 8)
+                    
+                    temp_mask = np.zeros((height, width), dtype=np.uint8)
+                    # Approximate bezier curve with line segments
+                    steps = 20
+                    for i in range(steps):
+                        t = i / steps
+                        t_next = (i + 1) / steps
+                        
+                        # Quadratic bezier formula: (1-t)²P₀ + 2(1-t)tP₁ + t²P₂
+                        x1 = int((1-t)**2 * start_x + 2*(1-t)*t * control_x + t**2 * end_x)
+                        y1 = int((1-t)**2 * start_y + 2*(1-t)*t * control_y + t**2 * end_y)
+                        x2 = int((1-t_next)**2 * start_x + 2*(1-t_next)*t_next * control_x + t_next**2 * end_x)
+                        y2 = int((1-t_next)**2 * start_y + 2*(1-t_next)*t_next * control_y + t_next**2 * end_y)
+                        
+                        cv2.line(temp_mask, (x1, y1), (x2, y2), 255, thickness)
+                
+                # Check overlap with vessel exclusion zone AND existing masks
                 overlap_pixels = np.sum((temp_mask > 0) & (vessel_exclusion > 0))
                 shape_pixels = np.sum(temp_mask > 0)
                 
+                # Check overlap with existing background masks (avoid mask-on-mask overlap)
+                existing_overlap = np.sum((temp_mask > 0) & (bg_mask > 0))
+                
+                # Check if adding this shape would exceed coverage limit
+                combined_mask = np.maximum(bg_mask, temp_mask)
+                new_total_pixels = np.sum(combined_mask > 0)
+                
+                if new_total_pixels > max_mask_pixels:
+                    continue  # Skip this shape to stay within coverage limit
+                
                 if shape_pixels > 0:
-                    overlap_ratio = overlap_pixels / shape_pixels
+                    vessel_overlap_ratio = overlap_pixels / shape_pixels
+                    existing_overlap_ratio = existing_overlap / shape_pixels if shape_pixels > 0 else 1.0
                     
-                    # Accept shape if less than 10% overlap with vessels
-                    if overlap_ratio < 0.1:
+                    # Accept shape if:
+                    # 1. Less than 10% overlap with vessels
+                    # 2. Less than 20% overlap with existing masks (some overlap OK for realism)
+                    if vessel_overlap_ratio < 0.1 and existing_overlap_ratio < 0.20:
                         bg_mask = np.maximum(bg_mask, temp_mask)
                         successful_shapes += 1
                         break
         
         return Image.fromarray(bg_mask, mode='L'), successful_shapes
     
-    def extract_safe_patches(self, img_shape, patch_size, num_patches=8):
+    def extract_safe_patches(self, img_shape, patch_size, num_patches=16):
         """Extrahiere Patches die komplett im Bild liegen (GRÜN)."""
         height, width = img_shape
         patches = []
@@ -150,7 +336,7 @@ class MaskProblemVisualizer:
             
         return patches
     
-    def extract_dangerous_patches(self, img_shape, patch_size, num_patches=4):
+    def extract_dangerous_patches(self, img_shape, patch_size, num_patches=8):
         """Extrahiere gefährliche Patches die am Rand abgeschnitten sind (GELB)."""
         height, width = img_shape
         patches = []
@@ -218,8 +404,8 @@ class MaskProblemVisualizer:
         print(f"🎭 Generated background mask with {num_shapes} shapes")
         
         # Generate patches
-        safe_patches = self.extract_safe_patches((height, width), patch_size, num_patches=6)
-        dangerous_patches = self.extract_dangerous_patches((height, width), patch_size, num_patches=3)
+        safe_patches = self.extract_safe_patches((height, width), patch_size, num_patches=12)
+        dangerous_patches = self.extract_dangerous_patches((height, width), patch_size, num_patches=6)
         
         # Check overlaps
         safe_overlaps = self.check_vessel_patch_overlap(vessel_mask, safe_patches)

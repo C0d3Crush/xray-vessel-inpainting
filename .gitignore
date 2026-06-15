@@ -1,35 +1,72 @@
 # Python
 __pycache__/
-*.pyc
-.python-version
+*.py[cod]
+*$py.class
+*.so
+.Python
 venv/
+env/
+ENV/
+.venv/
+.ENV/
+.python-version
 
-# Checkpoints & Weights
-*.pth
-*.pth.tar
-checkpoints/
+# Coverage reports
+htmlcov/
+.coverage
+*.coverage
+.coverage.*
+coverage.xml
+*.cover
+.pytest_cache/
+
+# Temporäre Test-Daten
+data/smoke_bg_img/
+data/smoke_bg_mask/
+outputs/checkpoints*/
 checkpoints_*/
-best.pth
 
-# Dataset
-arcade/
-arcade.zip
-temp/
-data/
+# Large files - model weights and dataset (too large for GitHub)
+checkpoints/*.pth
+data/arcade/
 
-# Training outputs
+# Logs und temporäre Dateien
 *.log
-training_log.csv
-training_plot.png
-samples/
+*.tmp
+*.bak
+*.swp
+*~
+# Root-level training files (gehören in checkpoints/)
+/training_log.csv
+/training_plot.png
 
-# macOS
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.spyderproject
+.spyproject
+
+# OS
 .DS_Store
+Thumbs.db
+desktop.ini
 
-# Local notes (not tracked)
-TODO.md
-CLAUDE.md
-
-# Sonstiges
+# Große Dateien / Archives  
 *.zip
-prepare_masks.py
+*.tar.gz
+*.tar
+*.gz
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Root-level Duplikate
+/demo.py
+/legacy_utils.py
+/compare_approaches.py
+
+# Alte Dokumentation (jetzt CHANGELOG.md)
+MODIFICATIONS.md

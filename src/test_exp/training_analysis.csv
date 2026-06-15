@@ -1,0 +1,2 @@
+epoch,train_loss,val_loss,l1_loss,ssim_loss,loss_change,psnr_realistic,learning_pattern
+1,0.197023,0.375956,0.137772,0.059251,0.000000,too_low,initial
