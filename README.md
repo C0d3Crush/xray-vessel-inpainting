@@ -174,9 +174,7 @@ make vessel-safe-train        # Training with vessel-safe masks
 make patch-comparison         # End-to-end: prepare + inference + visualize
 make inference                # Run inference on prepared samples
 make plot                     # Plot training curves
-make analyze-training         # Advanced metrics analysis
 make grid-workflow            # Grid mask generation + overview
-make hyperopt                 # Hyperparameter optimization (Optuna)
 make clean                    # Remove checkpoints and logs
 ```
 
@@ -192,8 +190,6 @@ make clean                    # Remove checkpoints and logs
 | `scripts/cache_masks.py` | Precompute vessel masks from COCO annotations |
 | `scripts/create_training_comparison.py` | Side-by-side Original / Mask / Result visualizations |
 | `scripts/plot_training.py` | Training metrics plots (3 or 5 metrics, auto-detected) |
-| `scripts/visualize_grid_system.py` | Grid-based mask generation visualization |
-| `scripts/debug_vessel_cleanup.py` | Debug vessel mask overlaps |
 | `scripts/preprocess_coco.py` | Convert COCO JSON → pickle cache (instant loading) |
 | `scripts/optimize_parameters.py` | Grid search and parameter optimization |
 

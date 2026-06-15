@@ -28,9 +28,6 @@ help:
 # Legacy inference-resize and visualize removed
 	@echo "  make training-comparison - Create enhanced comparison visualization"
 	@echo "  make plot            - Generate training plot from CSV"
-	@echo "  make analyze-training - Advanced training analysis with medical insights"
-	@echo "  make hyperopt        - Run hyperparameter optimization (quick)"
-	@echo "  make hyperopt-full   - Run full hyperparameter optimization"
 	@echo "  make mask-overview   - Create comprehensive mask and vessel overview"
 	@echo "  make grid-patches    - Generate 8×8 grid patches with vessel-safe masks"
 	@echo "  make vessel-safe-train - Train with vessel-safe masks (same logic as grid system)"
@@ -178,34 +175,6 @@ test-robustness:
 
 test-all-new:
 	pytest tests/unit/test_background_masks.py tests/unit/test_training_robustness.py tests/integration/test_workflow.py -v
-
-# Advanced analysis targets
-analyze-training:
-	@if [ -f checkpoints/training_log.csv ]; then \
-		python scripts/training_analysis_dashboard.py checkpoints/training_log.csv --output_dir checkpoints; \
-	elif [ -f checkpoints_bg/training_log.csv ]; then \
-		python scripts/training_analysis_dashboard.py checkpoints_bg/training_log.csv --output_dir checkpoints_bg; \
-	elif [ -f training_log.csv ]; then \
-		python scripts/training_analysis_dashboard.py training_log.csv; \
-	else \
-		echo "Error: No training_log.csv found. Train model first."; \
-		exit 1; \
-	fi
-
-hyperopt:
-	python scripts/hyperparameter_optimization.py --quick --device $(DEVICE) \
-		--train_img $(TRAIN_IMG) --train_mask data/masks_cache/train \
-		--val_img $(VAL_IMG) --val_ann $(VAL_ANN)
-
-hyperopt-full:
-	python scripts/hyperparameter_optimization.py --device $(DEVICE) \
-		--train_img $(TRAIN_IMG) --train_mask data/masks_cache/train \
-		--val_img $(VAL_IMG) --val_ann $(VAL_ANN)
-
-hyperopt-background:
-	python scripts/hyperparameter_optimization.py --quick --device $(DEVICE) \
-		--train_img data/smoke_bg_img --train_mask data/smoke_bg_mask \
-		--val_img $(VAL_IMG) --val_ann $(VAL_ANN)
 
 # Standard 64×64 patch comparison workflow
 patch-comparison:
