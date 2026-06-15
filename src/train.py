@@ -1731,6 +1731,12 @@ def train_model(
     save_every=10,
     keep_checkpoints=3,
     
+    # Advanced training modes
+    patch_mode=None,  # For compatibility (ignored, patches_per_image > 0 enables patches)
+    vessel_safe_training=False,
+    guaranteed_masks=False,
+    background_training=True,
+    
     # Callback for real-time monitoring (notebook integration)
     epoch_callback=None
 ):
@@ -1769,7 +1775,10 @@ def train_model(
                                   mask_dir=train_mask, random_masks=random_masks,
                                   mask_padding=mask_padding,
                                   patches_per_image=patches_per_image,
-                                  foreground_prob=foreground_prob, max_shapes=max_shapes)
+                                  foreground_prob=foreground_prob, max_shapes=max_shapes,
+                                  background_training=background_training,
+                                  vessel_safe_training=vessel_safe_training,
+                                  guaranteed_masks=guaranteed_masks)
     val_dataset   = ArcadeDataset(val_img, val_ann, input_size,
                                   mask_dir=val_mask,
                                   patches_per_image=patches_per_image,
