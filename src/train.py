@@ -1782,12 +1782,17 @@ def train_model(
     val_dataset   = ArcadeDataset(val_img, val_ann, input_size,
                                   mask_dir=val_mask,
                                   patches_per_image=patches_per_image,
-                                  foreground_prob=foreground_prob, max_shapes=max_shapes)
+                                  foreground_prob=foreground_prob, max_shapes=max_shapes,
+                                  background_training=background_training,
+                                  vessel_safe_training=vessel_safe_training,
+                                  guaranteed_masks=guaranteed_masks)
 
     if train_mask:
         print(f"  Using precomputed train masks from: {train_mask}")
     elif random_masks:
         print(f"  Generating random masks around vessel regions (padding: {mask_padding}px)")
+    elif vessel_safe_training:
+        print(f"  Generating vessel-safe background masks (SLOW - consider using --train_mask for speed)")
     else:
         print(f"  Generating train masks from COCO annotations")
 
