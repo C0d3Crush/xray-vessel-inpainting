@@ -29,6 +29,7 @@ checkpoints_*/
 # Large files - model weights and dataset (too large for GitHub)
 checkpoints/*.pth
 data/arcade/
+**/*.pth
 
 # Logs und temporäre Dateien
 *.log
@@ -70,3 +71,6 @@ desktop.ini
 
 # Alte Dokumentation (jetzt CHANGELOG.md)
 MODIFICATIONS.md
+
+# Claude Code instructions (local only)
+CLAUDE.md
