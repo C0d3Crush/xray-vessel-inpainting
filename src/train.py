@@ -1213,7 +1213,7 @@ def rotate_checkpoints(output_dir, keep_top_k=3):
 # ---------------------------------------------------------------------------
 # Training function for notebook integration
 # ---------------------------------------------------------------------------
-def train_model(train_img, train_ann, val_img, val_ann, epochs=10, batch_size=4, 
+def train_model_legacy(train_img, train_ann, val_img, val_ann, epochs=10, batch_size=4, 
                 lr=1e-4, input_size=64, device='cpu', output_dir='checkpoints',
                 patches_per_image=4, foreground_prob=0.75, 
                 max_shapes=5, smoke_test=False, smoke_size=10, save_every=10,
