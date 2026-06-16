@@ -41,6 +41,17 @@ data/arcade/
 /training_log.csv
 /training_plot.png
 
+# Images - not stored in git
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.tif
+*.webp
+outputs/
+
 # IDE
 .vscode/
 .idea/
@@ -72,5 +83,6 @@ desktop.ini
 # Alte Dokumentation (jetzt CHANGELOG.md)
 MODIFICATIONS.md
 
-# Claude Code instructions (local only)
+# Claude Code instructions and local notes (local only)
 CLAUDE.md
+REFERENCES.md
