@@ -11,7 +11,7 @@ import cv2
 from collections import defaultdict
 from tqdm import tqdm
 from network.network_pro import Inpaint
-from utils import load_checkpoint, psnr, rmse, wasserstein_distance_2d, calculate_kl_divergence
+from utils import load_checkpoint, save_checkpoint, rotate_checkpoints, psnr, rmse, wasserstein_distance_2d, calculate_kl_divergence
 import warnings
 try:
     from skimage.metrics import structural_similarity as ssim_fn
@@ -736,36 +736,6 @@ def set_seed(seed: int):
         torch.backends.cudnn.benchmark = False
 
 
-def save_checkpoint(model, optimizer, epoch, loss, path):
-    torch.save({
-        'epoch':      epoch,
-        'state_dict': model.state_dict(),
-        'optimizer':  optimizer.state_dict(),
-        'loss':       loss,
-    }, path)
-    print(f"  Checkpoint saved: {path}")
-
-
-def rotate_checkpoints(output_dir, keep_top_k=3):
-    """Keep only the top-k best checkpoints, delete others."""
-    import glob
-    pattern = os.path.join(output_dir, 'epoch_*.pth')
-    checkpoints = glob.glob(pattern)
-
-    if len(checkpoints) <= keep_top_k:
-        return
-
-    # Sort by modification time (newest first)
-    checkpoints.sort(key=os.path.getmtime, reverse=True)
-
-    # Delete old checkpoints beyond top-k
-    for old_ckpt in checkpoints[keep_top_k:]:
-        try:
-            os.remove(old_ckpt)
-            print(f"  Rotated out: {os.path.basename(old_ckpt)}")
-        except OSError:
-            pass
-
 
 
 # ---------------------------------------------------------------------------
@@ -1092,17 +1062,17 @@ def train_model(
         if val_psnr > best_val_psnr:
             best_val_psnr = val_psnr
             best_path = os.path.join(output_dir, 'best.pth')
-            save_checkpoint(model, optimizer, epoch, train_loss, best_path)
+            save_checkpoint(model, optimizer, epoch, best_path, metrics={'train_loss': train_loss})
             if use_drive:
                 drive_best = os.path.join(drive_ckpt_dir, 'best.pth')
-                save_checkpoint(model, optimizer, epoch, train_loss, drive_best)
+                save_checkpoint(model, optimizer, epoch, drive_best, metrics={'train_loss': train_loss})
 
         if epoch % save_every == 0:
             epoch_path = os.path.join(output_dir, f'epoch_{epoch:03d}.pth')
-            save_checkpoint(model, optimizer, epoch, train_loss, epoch_path)
+            save_checkpoint(model, optimizer, epoch, epoch_path, metrics={'train_loss': train_loss})
             if use_drive:
                 drive_epoch = os.path.join(drive_ckpt_dir, f'epoch_{epoch:03d}.pth')
-                save_checkpoint(model, optimizer, epoch, train_loss, drive_epoch)
+                save_checkpoint(model, optimizer, epoch, drive_epoch, metrics={'train_loss': train_loss})
 
             # Rotate old checkpoints
             if keep_checkpoints > 0:
