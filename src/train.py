@@ -725,6 +725,17 @@ class InpaintingLoss(nn.Module):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def set_seed(seed: int):
+    import random
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
 def save_checkpoint(model, optimizer, epoch, loss, path):
     torch.save({
         'epoch':      epoch,
@@ -842,6 +853,7 @@ def train_model(
     valid_weight=1.0,
     
     # Other parameters
+    seed=42,
     smoke_test=False,
     smoke_size=2,
     num_workers=2,
@@ -870,7 +882,9 @@ def train_model(
     from torch import optim
     from torch.utils.data import DataLoader
     from tqdm import tqdm
-    
+
+    set_seed(seed)
+
     # Import local modules (handle both script and package import contexts)
     try:
         from .utils import load_checkpoint
