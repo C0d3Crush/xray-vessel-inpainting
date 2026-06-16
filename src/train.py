@@ -146,78 +146,66 @@ class ArcadeDataset(Dataset):
             return cache[base_name]
         return os.path.join(directory, original_filename)
 
-    def _create_vessel_safe_mask(self, image_id, W, H, max_coverage=0.25, min_coverage=0.05):
-        """Create vessel-safe background masks using EXACT same logic as generate_grid_masks.py."""
-        # Step 1: Get vessel exclusion zones
-        vessel_mask = self._make_mask_from_annotations(image_id, W, H)
-        vessel_np = np.array(vessel_mask, dtype=np.uint8)
-        
-        # Step 2: Create vessel exclusion zone with EXACT same parameters as Grid-System
-        safety_margin = 15  # EXACT same as Grid-System
-        kernel_size = max(5, safety_margin * 2 + 1)
+    def _generate_vessel_free_mask(self, image_id, W, H,
+                                    dilation_margin, overlap_tolerance,
+                                    shape_types, max_attempts,
+                                    min_coverage=0.05, max_coverage=0.25):
+        """
+        Shared core for vessel-free mask generation.
+
+        Dilates vessel annotations by dilation_margin px, then fills the safe
+        area with random shapes.  Returns (PIL mask, num_successful_shapes).
+        """
+        vessel_np = np.array(self._make_mask_from_annotations(image_id, W, H), dtype=np.uint8)
+        kernel_size = max(5, dilation_margin * 2 + 1)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        vessel_exclusion = cv2.dilate(vessel_np, kernel, iterations=2)  # Double iterations
-        
-        # Step 3: Generate vessel-safe background mask
+        vessel_exclusion = cv2.dilate(vessel_np, kernel, iterations=2)
+
         bg_mask = np.zeros((H, W), dtype=np.uint8)
         total_pixels = W * H
         max_mask_pixels = int(total_pixels * max_coverage)
         min_mask_pixels = int(total_pixels * min_coverage)
-        
-        # PHASE 1: Try normal shapes with ZERO vessel overlap tolerance
-        shapes = ['circle', 'rectangle', 'ellipse', 'triangle', 'line', 'blob']
         successful_shapes = 0
-        max_attempts = 150  # More attempts for better coverage
-        
-        for attempt in range(max_attempts):
-            current_pixels = np.sum(bg_mask > 0)
-            
-            if current_pixels >= max_mask_pixels:
+
+        for _ in range(max_attempts):
+            if np.sum(bg_mask > 0) >= max_mask_pixels:
                 break
-                
-            shape_type = random.choice(shapes)
+            shape_type = random.choice(shape_types)
             temp_mask = self._generate_vessel_safe_shape(shape_type, W, H)
             shape_pixels = np.sum(temp_mask > 0)
             if shape_pixels == 0:
                 continue
-            
-            # Check vessel overlap - ZERO tolerance (same as Grid-System)
             vessel_overlap = np.sum((temp_mask > 0) & (vessel_exclusion > 0))
-            
-            # Check existing mask overlap
-            existing_overlap = np.sum((temp_mask > 0) & (bg_mask > 0))
-            existing_ratio = existing_overlap / shape_pixels
-            
-            # Accept only shapes with NO vessel overlap and minimal existing overlap
-            if vessel_overlap == 0 and existing_ratio < 0.15:
-                combined_mask = np.maximum(bg_mask, temp_mask)
-                combined_pixels = np.sum(combined_mask > 0)
-                
-                if combined_pixels <= max_mask_pixels:
-                    bg_mask = combined_mask
+            existing_ratio = np.sum((temp_mask > 0) & (bg_mask > 0)) / shape_pixels
+            if vessel_overlap / shape_pixels <= overlap_tolerance and existing_ratio < 0.15:
+                combined = np.maximum(bg_mask, temp_mask)
+                if np.sum(combined > 0) <= max_mask_pixels:
+                    bg_mask = combined
                     successful_shapes += 1
-        
-        # PHASE 2: Force minimum coverage if needed (same as Grid-System)
-        current_pixels = np.sum(bg_mask > 0)
-        if current_pixels < min_mask_pixels:
-            # Find completely free pixels
+
+        # Force minimum coverage using small scatter circles in vessel-free area
+        if np.sum(bg_mask > 0) < min_mask_pixels:
             free_coords = np.where((vessel_exclusion == 0) & (bg_mask == 0))
-            
-            if len(free_coords[0]) > 0:
-                needed_pixels = min_mask_pixels - current_pixels
-                available_pixels = len(free_coords[0])
-                
-                if available_pixels >= needed_pixels:
-                    indices = random.sample(range(len(free_coords[0])), needed_pixels)
-                    
-                    for idx in indices:
-                        y, x = free_coords[0][idx], free_coords[1][idx]
-                        cv2.circle(bg_mask, (x, y), 2, 255, -1)  # Small 2px circles
-                    
-                    successful_shapes += 1
+            needed = min_mask_pixels - np.sum(bg_mask > 0)
+            if len(free_coords[0]) >= needed:
+                for idx in random.sample(range(len(free_coords[0])), needed):
+                    cv2.circle(bg_mask, (int(free_coords[1][idx]), int(free_coords[0][idx])), 2, 255, -1)
+                successful_shapes += 1
 
         bg_mask[vessel_exclusion > 0] = 0
         return Image.fromarray(bg_mask, mode='L'), successful_shapes
+
+    def _create_vessel_safe_mask(self, image_id, W, H, max_coverage=0.25, min_coverage=0.05):
+        """Vessel-safe mask with zero overlap tolerance (matches grid-system parameters)."""
+        return self._generate_vessel_free_mask(
+            image_id, W, H,
+            dilation_margin=15,
+            overlap_tolerance=0.0,
+            shape_types=['circle', 'rectangle', 'ellipse', 'triangle', 'line', 'blob'],
+            max_attempts=150,
+            min_coverage=min_coverage,
+            max_coverage=max_coverage,
+        )
 
     def _generate_vessel_safe_shape(self, shape_type, W, H):
         """Generate vessel-safe shapes using EXACT same logic as Grid-System."""
@@ -298,100 +286,6 @@ class ArcadeDataset(Dataset):
                     draw.polygon(xy, fill=255)
         return mask
     
-    def _make_background_mask_from_annotations(self, image_id, W, H):
-        """Generate random background masks avoiding vessel regions (255 = background)."""
-        # Step 1: Get vessel exclusion zones
-        vessel_mask = self._make_mask_from_annotations(image_id, W, H)
-        vessel_np = np.array(vessel_mask, dtype=np.uint8)
-        
-        # Step 2: Create vessel exclusion zone with enhanced safety margin
-        # Use larger padding for background training to ensure vessel-free regions
-        enhanced_margin = max(8, self.safety_margin * 3)  # Tripled safety margin
-        kernel_size = max(5, enhanced_margin * 2 + 1)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        vessel_exclusion = cv2.dilate(vessel_np, kernel, iterations=2)  # Double dilation
-        
-        # Step 3: Generate random background patches
-        bg_mask = np.zeros((H, W), dtype=np.uint8)
-        num_shapes = random.randint(3, min(8, self.max_shapes + 3))  # More background patches
-        
-        successful_shapes = 0
-        max_attempts = 100
-        
-        for _ in range(num_shapes):
-            for _ in range(max_attempts):
-                shape_type = random.choice(['circle', 'rectangle', 'ellipse'])
-                
-                if shape_type == 'circle':
-                    # Random circle in background
-                    radius = random.randint(8, min(W, H) // 8)
-                    center_x = random.randint(radius, W - radius)
-                    center_y = random.randint(radius, H - radius)
-                    
-                    # Create temporary mask for this shape
-                    temp_mask = np.zeros((H, W), dtype=np.uint8)
-                    cv2.circle(temp_mask, (center_x, center_y), radius, 255, -1)
-                    
-                elif shape_type == 'rectangle':
-                    # Random rectangle in background
-                    width = random.randint(10, min(W, H) // 6)
-                    height = random.randint(10, min(W, H) // 6)
-                    x = random.randint(0, W - width)
-                    y = random.randint(0, H - height)
-                    
-                    # Create temporary mask
-                    temp_mask = np.zeros((H, W), dtype=np.uint8)
-                    cv2.rectangle(temp_mask, (x, y), (x + width, y + height), 255, -1)
-                    
-                else:  # ellipse
-                    # Random ellipse in background
-                    center_x = random.randint(W // 6, 5 * W // 6)
-                    center_y = random.randint(H // 6, 5 * H // 6)
-                    axes_x = random.randint(8, min(W, H) // 10)
-                    axes_y = random.randint(8, min(W, H) // 10)
-                    angle = random.randint(0, 180)
-                    
-                    # Create temporary mask
-                    temp_mask = np.zeros((H, W), dtype=np.uint8)
-                    cv2.ellipse(temp_mask, (center_x, center_y), (axes_x, axes_y), angle, 0, 360, 255, -1)
-                
-                # Check overlap with vessel exclusion zone
-                overlap_pixels = np.sum((temp_mask > 0) & (vessel_exclusion > 0))
-                shape_pixels = np.sum(temp_mask > 0)
-                
-                if shape_pixels > 0:
-                    overlap_ratio = overlap_pixels / shape_pixels
-                    
-                    # Stricter overlap control for background training (less than 3% overlap)
-                    if overlap_ratio < 0.03:  # Much stricter: only 3% overlap allowed
-                        bg_mask = np.maximum(bg_mask, temp_mask)
-                        successful_shapes += 1
-                        break
-        
-        # Ensure we have meaningful background coverage (at least 5%, max 25%)
-        total_pixels = W * H
-        bg_coverage = np.sum(bg_mask > 0) / total_pixels
-        
-        if bg_coverage < 0.05:
-            # Add one safe central rectangle if we have too little coverage
-            safe_size = min(W, H) // 8
-            center_x, center_y = W // 2, H // 2
-            x1 = center_x - safe_size // 2
-            y1 = center_y - safe_size // 2
-            x2 = center_x + safe_size // 2
-            y2 = center_y + safe_size // 2
-            
-            # Check if center is vessel-free
-            center_exclusion = vessel_exclusion[y1:y2, x1:x2]
-            if np.sum(center_exclusion > 0) / (safe_size * safe_size) < 0.2:
-                cv2.rectangle(bg_mask, (x1, y1), (x2, y2), 255, -1)
-        
-        elif bg_coverage > 0.25:
-            # Reduce mask if too much coverage
-            kernel_reduce = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-            bg_mask = cv2.erode(bg_mask, kernel_reduce, iterations=1)
-        
-        return Image.fromarray(bg_mask, mode='L')
 
     def _generate_random_mask(self, base_mask, W, H):
         """
@@ -638,8 +532,7 @@ class ArcadeDataset(Dataset):
                     # NEW: Generate vessel-safe background masks using Grid-System logic
                     mask_pil, _ = self._create_vessel_safe_mask(image_id, W, H)
                 else:
-                    # LEGACY: Generate background masks (avoiding vessels)
-                    mask_pil = self._make_background_mask_from_annotations(image_id, W, H)
+                    mask_pil, _ = self._create_vessel_safe_mask(image_id, W, H)
             else:
                 # INFERENCE: Generate vessel masks (for vessel removal)
                 base_mask_pil = self._make_mask_from_annotations(image_id, W, H)
