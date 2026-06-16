@@ -118,8 +118,8 @@ class ArcadeDataset(Dataset):
         original_count = len(self.image_ids)
         filtered_ids = [
             img_id for img_id in self.image_ids
-            if self.id_to_info[img_id]['file_name'].replace('.png', '') in self._img_cache
-            and self.id_to_info[img_id]['file_name'].replace('.png', '') in self._mask_cache
+            if os.path.splitext(self.id_to_info[img_id]['file_name'])[0] in self._img_cache
+            and os.path.splitext(self.id_to_info[img_id]['file_name'])[0] in self._mask_cache
         ]
         filtered_count = len(filtered_ids)
         if filtered_count < original_count:
