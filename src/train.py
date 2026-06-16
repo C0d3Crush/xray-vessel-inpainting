@@ -979,17 +979,18 @@ def train_model(
         val_wasserstein = 0.0
         val_rmse = 0.0
         val_kl_divergence = 0.0
+        val_num_samples = 0
         with torch.no_grad():
             for img, mask in tqdm(val_loader, desc=f"Epoch {epoch}/{epochs} [val]"):
                 img, mask = img.to(device), mask.to(device)
                 output = model(img, mask)
-                
+
                 # Calculate validation loss
                 loss, loss_components = criterion(output, img, mask)
                 val_loss += loss.item()
                 val_l1_loss += loss_components['l1_loss']
                 val_ssim_loss += loss_components['ssim_loss']
-                
+
                 output = torch.clip(output, -1.0, 1.0)
                 out_np = (output[:, 0].cpu().numpy() * 0.5 + 0.5) * 255.0
                 gt_np  = (img[:, 0].cpu().numpy()    * 0.5 + 0.5) * 255.0
@@ -999,15 +1000,17 @@ def train_model(
                     val_wasserstein += wasserstein_distance_2d(o, g)
                     val_rmse += rmse(o, g)
                     val_kl_divergence += calculate_kl_divergence(o, g)
-        
+                    val_num_samples += 1
+
         val_loss /= len(val_loader)
         val_l1_loss /= len(val_loader)
         val_ssim_loss /= len(val_loader)
-        val_psnr /= len(val_dataset)
-        val_ssim /= len(val_dataset)
-        val_wasserstein /= len(val_dataset)
-        val_rmse /= len(val_dataset)
-        val_kl_divergence /= len(val_dataset)
+        if val_num_samples > 0:
+            val_psnr /= val_num_samples
+            val_ssim /= val_num_samples
+            val_wasserstein /= val_num_samples
+            val_rmse /= val_num_samples
+            val_kl_divergence /= val_num_samples
 
         scheduler.step()
 
