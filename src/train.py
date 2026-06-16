@@ -57,6 +57,19 @@ class ArcadeDataset(Dataset):
         safety_margin: int = 5,
         max_shapes: int = 5,
     ):
+        if not os.path.isdir(img_dir):
+            raise NotADirectoryError(f"img_dir not found: {img_dir}")
+        if not os.path.isfile(ann_path):
+            raise FileNotFoundError(f"ann_path not found: {ann_path}")
+        if mask_dir is not None and not os.path.isdir(mask_dir):
+            raise NotADirectoryError(f"mask_dir not found: {mask_dir}")
+        if not 0.0 <= foreground_prob <= 1.0:
+            raise ValueError(f"foreground_prob must be in [0, 1], got {foreground_prob}")
+        if image_size < 32:
+            raise ValueError(f"image_size must be >= 32, got {image_size}")
+        if patches_per_image < 1:
+            raise ValueError(f"patches_per_image must be >= 1, got {patches_per_image}")
+
         self.img_dir      = img_dir
         self.image_size   = image_size
         self.mask_dir     = mask_dir
