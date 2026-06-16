@@ -62,12 +62,12 @@ for mask_fn in prog_bar:
     final_result = result_np * mask_binary + gt_patch.astype(np.float32) * (1 - mask_binary)
     
     # Calculate PSNR
-    psnr = calculate_psnr(gt_patch, final_result.astype(np.uint8))
-    psnr_scores.append(psnr)
-    
+    psnr_score = psnr(gt_patch, final_result.astype(np.uint8))
+    psnr_scores.append(psnr_score)
+
     # Save 64x64 result
     cv2.imwrite(os.path.join(args.output_path, fn), final_result.astype(np.uint8))
-    prog_bar.set_postfix({"PSNR": f"{psnr:.2f}"})
+    prog_bar.set_postfix({"PSNR": f"{psnr_score:.2f}"})
 
 avg_psnr = np.mean(psnr_scores) if psnr_scores else 0
 print(f"\n✓ Patch inference complete!")
