@@ -51,6 +51,7 @@ data/arcade/
 *.tif
 *.webp
 outputs/
+docs/
 
 # IDE
 .vscode/
