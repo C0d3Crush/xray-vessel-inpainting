@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from network.network_pro import Inpaint
-from utils import load_checkpoint, save_checkpoint, rotate_checkpoints, psnr, rmse, wasserstein_distance_2d, calculate_kl_divergence
+from utils import load_checkpoint, save_checkpoint, rotate_checkpoints, wasserstein_distance_2d, calculate_kl_divergence
 from dataset import ArcadeDataset, DatasetConfig
 from losses import InpaintingLoss, ssim_fn
 
@@ -218,13 +218,19 @@ def train_model(
                 val_ssim_loss += loss_components['ssim_loss']
 
                 output = torch.clip(output, -1.0, 1.0)
-                out_np = (output[:, 0].cpu().numpy() * 0.5 + 0.5) * 255.0
+                out_np = (output[:, 0].cpu().numpy() * 0.5 + 0.5) * 255.0  # (B, H, W)
                 gt_np  = (img[:, 0].cpu().numpy()    * 0.5 + 0.5) * 255.0
+
+                # Vectorised over batch — one numpy call instead of B calls
+                mse_per  = ((out_np - gt_np) ** 2).mean(axis=(1, 2))         # (B,)
+                val_psnr += np.where(mse_per == 0, 100.0,
+                                     20 * np.log10(255.0 / np.sqrt(np.maximum(mse_per, 1e-10)))).sum()
+                val_rmse += np.sqrt(mse_per).sum()
+
+                # Per-sample metrics that don't support batch computation
                 for o, g in zip(out_np, gt_np):
-                    val_psnr += psnr(o, g)
                     val_ssim += ssim_fn(o, g, data_range=255.0, channel_axis=None)
                     val_wasserstein += wasserstein_distance_2d(o, g)
-                    val_rmse += rmse(o, g)
                     val_kl_divergence += calculate_kl_divergence(o, g)
                     val_num_samples += 1
 
