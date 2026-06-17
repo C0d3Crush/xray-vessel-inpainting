@@ -8,7 +8,7 @@ except ImportError:
 
 
 def _load(checkpoint_path, device):
-    checkpoint = torch.load(checkpoint_path, map_location=torch.device(device))
+    checkpoint = torch.load(checkpoint_path, map_location=torch.device(device), weights_only=True)
     return checkpoint
 
 def load_checkpoint(path, model, device, optimizer=None, reset_optimizer=True, is_dis=False):
