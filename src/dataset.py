@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os, json, random
+from dataclasses import dataclass, field
 from pathlib import Path
 from collections import defaultdict
 import numpy as np
@@ -8,6 +9,25 @@ from torch.utils.data import Dataset
 from PIL import Image, ImageDraw
 import cv2
 from utils import load_coco_annotations
+
+
+@dataclass
+class DatasetConfig:
+    """Configuration for ArcadeDataset — groups all dataset knobs in one place."""
+    # Patch extraction
+    image_size: int = 64
+    patches_per_image: int = 4
+    foreground_prob: float = 0.75
+    # Mask source
+    mask_dir: str = None
+    random_masks: bool = False
+    mask_padding: int = 10
+    # Training mode
+    background_training: bool = True
+    vessel_safe_training: bool = False
+    # Shape generation
+    safety_margin: int = 5
+    max_shapes: int = 5
 
 
 class ArcadeDataset(Dataset):
@@ -23,50 +43,34 @@ class ArcadeDataset(Dataset):
     """
     STENOSIS_CATEGORY_ID = 26
 
-    def __init__(
-        self,
-        img_dir: str,
-        ann_path: str,
-        *,
-        # patch extraction
-        image_size: int = 64,
-        patches_per_image: int = 4,
-        foreground_prob: float = 0.75,
-        # mask source
-        mask_dir: str = None,
-        random_masks: bool = False,
-        mask_padding: int = 10,
-        # training mode
-        background_training: bool = True,
-        vessel_safe_training: bool = False,
-        # shape generation
-        safety_margin: int = 5,
-        max_shapes: int = 5,
-    ):
+    def __init__(self, img_dir: str, ann_path: str, cfg: DatasetConfig = None):
+        if cfg is None:
+            cfg = DatasetConfig()
+
         if not os.path.isdir(img_dir):
             raise NotADirectoryError(f"img_dir not found: {img_dir}")
         if not os.path.isfile(ann_path):
             raise FileNotFoundError(f"ann_path not found: {ann_path}")
-        if mask_dir is not None and not os.path.isdir(mask_dir):
-            raise NotADirectoryError(f"mask_dir not found: {mask_dir}")
-        if not 0.0 <= foreground_prob <= 1.0:
-            raise ValueError(f"foreground_prob must be in [0, 1], got {foreground_prob}")
-        if image_size < 32:
-            raise ValueError(f"image_size must be >= 32, got {image_size}")
-        if patches_per_image < 1:
-            raise ValueError(f"patches_per_image must be >= 1, got {patches_per_image}")
+        if cfg.mask_dir is not None and not os.path.isdir(cfg.mask_dir):
+            raise NotADirectoryError(f"mask_dir not found: {cfg.mask_dir}")
+        if not 0.0 <= cfg.foreground_prob <= 1.0:
+            raise ValueError(f"foreground_prob must be in [0, 1], got {cfg.foreground_prob}")
+        if cfg.image_size < 32:
+            raise ValueError(f"image_size must be >= 32, got {cfg.image_size}")
+        if cfg.patches_per_image < 1:
+            raise ValueError(f"patches_per_image must be >= 1, got {cfg.patches_per_image}")
 
         self.img_dir      = img_dir
-        self.image_size   = image_size
-        self.mask_dir     = mask_dir
-        self.random_masks = random_masks
-        self.mask_padding = mask_padding
-        self.patches_per_image = patches_per_image
-        self.safety_margin = safety_margin
-        self.foreground_prob = foreground_prob
-        self.max_shapes = max_shapes
-        self.background_training = background_training
-        self.vessel_safe_training = vessel_safe_training
+        self.image_size   = cfg.image_size
+        self.mask_dir     = cfg.mask_dir
+        self.random_masks = cfg.random_masks
+        self.mask_padding = cfg.mask_padding
+        self.patches_per_image = cfg.patches_per_image
+        self.safety_margin = cfg.safety_margin
+        self.foreground_prob = cfg.foreground_prob
+        self.max_shapes = cfg.max_shapes
+        self.background_training = cfg.background_training
+        self.vessel_safe_training = cfg.vessel_safe_training
         self._img_cache  = self._build_path_cache(self.img_dir)
         self._mask_cache = self._build_path_cache(self.mask_dir) if self.mask_dir else {}
 

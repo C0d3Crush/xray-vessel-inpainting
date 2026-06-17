@@ -4,7 +4,42 @@ import json
 import pytest
 import numpy as np
 from PIL import Image
-from dataset import ArcadeDataset
+from dataset import ArcadeDataset, DatasetConfig
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _ds(mock_dataset_dir, **cfg_kwargs):
+    """Convenience: build ArcadeDataset with a DatasetConfig."""
+    return ArcadeDataset(
+        mock_dataset_dir["img_dir"],
+        mock_dataset_dir["ann_path"],
+        DatasetConfig(**cfg_kwargs),
+    )
+
+
+# ---------------------------------------------------------------------------
+# DatasetConfig
+# ---------------------------------------------------------------------------
+
+class TestDatasetConfig:
+    def test_defaults(self):
+        cfg = DatasetConfig()
+        assert cfg.image_size == 64
+        assert cfg.patches_per_image == 4
+        assert cfg.foreground_prob == 0.75
+        assert cfg.mask_dir is None
+        assert cfg.random_masks is False
+        assert cfg.background_training is True
+        assert cfg.vessel_safe_training is False
+
+    def test_custom_values(self):
+        cfg = DatasetConfig(image_size=128, patches_per_image=8, foreground_prob=0.5)
+        assert cfg.image_size == 128
+        assert cfg.patches_per_image == 8
+        assert cfg.foreground_prob == 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +66,7 @@ class TestArcadeDatasetValidation:
             ArcadeDataset(
                 mock_dataset_dir["img_dir"],
                 mock_dataset_dir["ann_path"],
-                mask_dir=str(tmp_path / "no_masks"),
+                DatasetConfig(mask_dir=str(tmp_path / "no_masks")),
             )
 
     def test_foreground_prob_below_zero_raises(self, mock_dataset_dir):
@@ -39,7 +74,7 @@ class TestArcadeDatasetValidation:
             ArcadeDataset(
                 mock_dataset_dir["img_dir"],
                 mock_dataset_dir["ann_path"],
-                foreground_prob=-0.1,
+                DatasetConfig(foreground_prob=-0.1),
             )
 
     def test_foreground_prob_above_one_raises(self, mock_dataset_dir):
@@ -47,7 +82,7 @@ class TestArcadeDatasetValidation:
             ArcadeDataset(
                 mock_dataset_dir["img_dir"],
                 mock_dataset_dir["ann_path"],
-                foreground_prob=1.1,
+                DatasetConfig(foreground_prob=1.1),
             )
 
     def test_image_size_below_32_raises(self, mock_dataset_dir):
@@ -55,7 +90,7 @@ class TestArcadeDatasetValidation:
             ArcadeDataset(
                 mock_dataset_dir["img_dir"],
                 mock_dataset_dir["ann_path"],
-                image_size=16,
+                DatasetConfig(image_size=16),
             )
 
     def test_patches_per_image_zero_raises(self, mock_dataset_dir):
@@ -63,16 +98,16 @@ class TestArcadeDatasetValidation:
             ArcadeDataset(
                 mock_dataset_dir["img_dir"],
                 mock_dataset_dir["ann_path"],
-                patches_per_image=0,
+                DatasetConfig(patches_per_image=0),
             )
 
     def test_valid_construction_succeeds(self, mock_dataset_dir):
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-            image_size=64,
-        )
+        ds = _ds(mock_dataset_dir, image_size=64)
         assert ds is not None
+
+    def test_default_cfg_used_when_none(self, mock_dataset_dir):
+        ds = ArcadeDataset(mock_dataset_dir["img_dir"], mock_dataset_dir["ann_path"])
+        assert ds.image_size == 64  # DatasetConfig default
 
 
 # ---------------------------------------------------------------------------
@@ -81,11 +116,7 @@ class TestArcadeDatasetValidation:
 
 class TestStenosisFiltering:
     def test_stenosis_category_excluded(self, mock_dataset_dir):
-        """Annotations with category_id=26 must not be loaded."""
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-        )
+        ds = _ds(mock_dataset_dir)
         for img_id, anns in ds.anns_by_image.items():
             for ann in anns:
                 assert ann["category_id"] != 26
@@ -101,21 +132,11 @@ class TestStenosisFiltering:
 class TestDatasetLen:
     def test_len_equals_images_times_patches(self, mock_dataset_dir):
         patches = 3
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-            image_size=64,
-            patches_per_image=patches,
-        )
+        ds = _ds(mock_dataset_dir, image_size=64, patches_per_image=patches)
         assert len(ds) == len(ds.image_ids) * patches
 
     def test_len_with_one_patch(self, mock_dataset_dir):
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-            image_size=64,
-            patches_per_image=1,
-        )
+        ds = _ds(mock_dataset_dir, image_size=64, patches_per_image=1)
         assert len(ds) == len(ds.image_ids)
 
 
@@ -125,32 +146,24 @@ class TestDatasetLen:
 
 class TestBuildPathCache:
     def test_returns_dict(self, mock_dataset_dir):
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-        )
+        ds = _ds(mock_dataset_dir)
         cache = ds._build_path_cache(mock_dataset_dir["img_dir"])
         assert isinstance(cache, dict)
 
     def test_maps_stem_to_path(self, mock_dataset_dir):
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-        )
+        ds = _ds(mock_dataset_dir)
         cache = ds._build_path_cache(mock_dataset_dir["img_dir"])
-        # img_001 and img_002 should be present
         assert "img_001" in cache
         assert "img_002" in cache
 
     def test_empty_directory_returns_empty(self, tmp_path):
         empty = tmp_path / "empty"
         empty.mkdir()
-        ds = ArcadeDataset.__new__(ArcadeDataset)  # skip __init__
+        ds = ArcadeDataset.__new__(ArcadeDataset)
         cache = ds._build_path_cache(str(empty))
         assert cache == {}
 
     def test_bg_prefix_mapped_to_base(self, tmp_path):
-        """Files named stem_bg_N.png should also register under 'stem'."""
         d = tmp_path / "imgs"
         d.mkdir()
         Image.new("L", (32, 32)).save(d / "case001_bg_01.png")
@@ -165,52 +178,30 @@ class TestBuildPathCache:
 
 class TestMakeMaskFromAnnotations:
     def test_returns_pil_l_mode(self, mock_dataset_dir, coco_data):
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-        )
+        ds = _ds(mock_dataset_dir)
         img_id = coco_data["images"][0]["id"]
         mask = ds._make_mask_from_annotations(img_id, W=128, H=128)
         assert isinstance(mask, Image.Image)
         assert mask.mode == "L"
 
     def test_output_size(self, mock_dataset_dir, coco_data):
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-        )
+        ds = _ds(mock_dataset_dir)
         img_id = coco_data["images"][0]["id"]
         mask = ds._make_mask_from_annotations(img_id, W=128, H=128)
         assert mask.size == (128, 128)
 
     def test_vessel_polygon_rasterized(self, mock_dataset_dir, coco_data):
-        """The polygon region [10,10 → 50,50] should be non-zero."""
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-        )
+        ds = _ds(mock_dataset_dir)
         img_id = coco_data["images"][0]["id"]
         mask = ds._make_mask_from_annotations(img_id, W=128, H=128)
         arr = np.array(mask)
-        assert arr[20, 20] > 0  # inside the annotation polygon
+        assert arr[20, 20] > 0
 
     def test_no_stenosis_in_mask(self, mock_dataset_dir, coco_data):
-        """Category 26 polygon at [5,5→15,15] must not appear in the mask."""
-        # The stenosis polygon is at rows/cols 5-15
-        # Image 1 has stenosis + vessel; only vessel should be rasterized
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-        )
-        # Build a dataset that would include stenosis if not filtered
+        ds = _ds(mock_dataset_dir)
         img_id = coco_data["images"][0]["id"]
         mask = ds._make_mask_from_annotations(img_id, W=128, H=128)
-        arr = np.array(mask)
-        # The stenosis polygon is entirely within [5:15, 5:15]
-        # The vessel polygon covers [10:50, 10:50], so [5:9, 5:9] is pure stenosis area
-        # Those pixels should be 0 (stenosis excluded) or part of vessel (overlapping)
-        # We just verify the function doesn't crash and respects filtering via anns_by_image
-        assert arr is not None  # basic smoke check; stenosis filtered at load time
+        assert np.array(mask) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -220,10 +211,7 @@ class TestMakeMaskFromAnnotations:
 class TestGenerateVesselSafeShape:
     @pytest.fixture(autouse=True)
     def ds(self, mock_dataset_dir):
-        self.ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-        )
+        self.ds = _ds(mock_dataset_dir)
 
     @pytest.mark.parametrize("shape_type", [
         "circle", "rectangle", "ellipse", "triangle", "line", "blob"
@@ -251,8 +239,6 @@ class TestGenerateVesselSafeShape:
         "circle", "rectangle", "ellipse", "triangle", "line", "blob"
     ])
     def test_shape_has_nonzero_pixels(self, shape_type):
-        """Generated shape should cover at least 1 pixel."""
-        # Run a few times to avoid flaky near-zero shapes
         found_nonzero = False
         for _ in range(5):
             arr = self.ds._generate_vessel_safe_shape(shape_type, W=128, H=128)
@@ -269,11 +255,7 @@ class TestGenerateVesselSafeShape:
 class TestExtractSafePatch:
     @pytest.fixture(autouse=True)
     def ds(self, mock_dataset_dir):
-        self.ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-            image_size=64,
-        )
+        self.ds = _ds(mock_dataset_dir, image_size=64)
 
     def test_patch_shape(self):
         img  = np.random.randint(0, 255, (128, 128), dtype=np.uint8).astype(float)
@@ -306,81 +288,49 @@ class TestExtractSafePatch:
 class TestDatasetGetItem:
     def test_returns_two_tensors(self, mock_dataset_dir):
         import torch
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-            image_size=64,
-            patches_per_image=1,
-        )
+        ds = _ds(mock_dataset_dir, image_size=64, patches_per_image=1)
         img_t, mask_t = ds[0]
         assert isinstance(img_t, torch.Tensor)
         assert isinstance(mask_t, torch.Tensor)
 
     def test_image_tensor_shape(self, mock_dataset_dir):
-        import torch
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-            image_size=64,
-            patches_per_image=1,
-        )
+        ds = _ds(mock_dataset_dir, image_size=64, patches_per_image=1)
         img_t, _ = ds[0]
         assert img_t.shape == (1, 64, 64)
 
     def test_mask_tensor_shape(self, mock_dataset_dir):
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-            image_size=64,
-            patches_per_image=1,
-        )
+        ds = _ds(mock_dataset_dir, image_size=64, patches_per_image=1)
         _, mask_t = ds[0]
         assert mask_t.shape == (1, 64, 64)
 
     def test_image_range(self, mock_dataset_dir):
-        """Image must be normalized to [-1, 1]."""
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-            image_size=64,
-            patches_per_image=1,
-        )
+        ds = _ds(mock_dataset_dir, image_size=64, patches_per_image=1)
         img_t, _ = ds[0]
         assert img_t.min() >= -1.0 - 1e-5
         assert img_t.max() <=  1.0 + 1e-5
 
     def test_mask_range(self, mock_dataset_dir):
-        """Mask must be in [0, 1]."""
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-            image_size=64,
-            patches_per_image=1,
-        )
+        ds = _ds(mock_dataset_dir, image_size=64, patches_per_image=1)
         _, mask_t = ds[0]
         assert mask_t.min() >= 0.0 - 1e-5
         assert mask_t.max() <= 1.0 + 1e-5
 
     def test_dtype_float32(self, mock_dataset_dir):
         import torch
-        ds = ArcadeDataset(
-            mock_dataset_dir["img_dir"],
-            mock_dataset_dir["ann_path"],
-            image_size=64,
-            patches_per_image=1,
-        )
+        ds = _ds(mock_dataset_dir, image_size=64, patches_per_image=1)
         img_t, mask_t = ds[0]
         assert img_t.dtype  == torch.float32
         assert mask_t.dtype == torch.float32
 
     def test_precomputed_mask_loaded(self, mock_dataset_dir_with_masks):
-        """When mask_dir is provided, precomputed masks are used."""
         ds = ArcadeDataset(
             mock_dataset_dir_with_masks["img_dir"],
             mock_dataset_dir_with_masks["ann_path"],
-            image_size=64,
-            patches_per_image=1,
-            mask_dir=mock_dataset_dir_with_masks["mask_dir"],
+            DatasetConfig(
+                image_size=64,
+                patches_per_image=1,
+                mask_dir=mock_dataset_dir_with_masks["mask_dir"],
+            ),
         )
         assert len(ds) > 0
         img_t, mask_t = ds[0]

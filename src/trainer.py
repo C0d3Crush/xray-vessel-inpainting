@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from network.network_pro import Inpaint
 from utils import load_checkpoint, save_checkpoint, rotate_checkpoints, psnr, rmse, wasserstein_distance_2d, calculate_kl_divergence
-from dataset import ArcadeDataset
+from dataset import ArcadeDataset, DatasetConfig
 from losses import InpaintingLoss, ssim_fn
 
 
@@ -90,21 +90,24 @@ def train_model(
     device = torch.device(device)
 
     # ---- Datasets ----
-    train_dataset = ArcadeDataset(train_img, train_ann,
-                                  image_size=input_size,
-                                  mask_dir=train_mask, random_masks=random_masks,
-                                  mask_padding=mask_padding,
-                                  patches_per_image=patches_per_image,
-                                  foreground_prob=foreground_prob, max_shapes=max_shapes,
-                                  background_training=background_training,
-                                  vessel_safe_training=vessel_safe_training)
-    val_dataset   = ArcadeDataset(val_img, val_ann,
-                                  image_size=input_size,
-                                  mask_dir=val_mask,
-                                  patches_per_image=patches_per_image,
-                                  foreground_prob=foreground_prob, max_shapes=max_shapes,
-                                  background_training=background_training,
-                                  vessel_safe_training=vessel_safe_training)
+    base_cfg = DatasetConfig(
+        image_size=input_size,
+        patches_per_image=patches_per_image,
+        foreground_prob=foreground_prob,
+        max_shapes=max_shapes,
+        background_training=background_training,
+        vessel_safe_training=vessel_safe_training,
+    )
+    train_cfg = DatasetConfig(
+        **{**base_cfg.__dict__,
+           'mask_dir': train_mask,
+           'random_masks': random_masks,
+           'mask_padding': mask_padding},
+    )
+    val_cfg = DatasetConfig(**{**base_cfg.__dict__, 'mask_dir': val_mask})
+
+    train_dataset = ArcadeDataset(train_img, train_ann, train_cfg)
+    val_dataset   = ArcadeDataset(val_img,   val_ann,   val_cfg)
 
     if train_mask:
         print(f"  Using precomputed train masks from: {train_mask}")
