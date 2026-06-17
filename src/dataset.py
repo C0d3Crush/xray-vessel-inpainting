@@ -7,6 +7,7 @@ import torch
 from torch.utils.data import Dataset
 from PIL import Image, ImageDraw
 import cv2
+from utils import load_coco_annotations
 
 
 class ArcadeDataset(Dataset):
@@ -80,17 +81,7 @@ class ArcadeDataset(Dataset):
             self.image_ids = cached['image_ids']
         else:
             # Fallback: parse COCO JSON
-            with open(ann_path) as f:
-                coco = json.load(f)
-            self.id_to_info = {img['id']: img for img in coco['images']}
-            self.anns_by_image = defaultdict(list)
-            for ann in coco['annotations']:
-                if ann['category_id'] != self.STENOSIS_CATEGORY_ID:
-                    self.anns_by_image[ann['image_id']].append(ann)
-            self.image_ids = [
-                img_id for img_id in self.id_to_info
-                if self.anns_by_image[img_id]
-            ]
+            self.id_to_info, self.anns_by_image, self.image_ids = load_coco_annotations(ann_path)
 
         if self.mask_dir:
             self.image_ids = self._filter_existing_files()

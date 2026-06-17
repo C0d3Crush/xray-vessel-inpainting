@@ -1,4 +1,5 @@
 """Tests for src/utils.py — metrics and checkpoint helpers."""
+import json
 import os
 import pytest
 import numpy as np
@@ -7,6 +8,7 @@ import torch.nn as nn
 from utils import (
     psnr, rmse, wasserstein_distance_2d, calculate_kl_divergence,
     save_checkpoint, load_checkpoint, rotate_checkpoints,
+    load_coco_annotations, STENOSIS_CATEGORY_ID,
 )
 
 
@@ -263,3 +265,69 @@ class TestRotateCheckpoints:
 
     def test_empty_directory_no_error(self, tmp_path):
         rotate_checkpoints(str(tmp_path), keep_checkpoints=3)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# load_coco_annotations
+# ---------------------------------------------------------------------------
+
+class TestLoadCocoAnnotations:
+    @pytest.fixture
+    def coco_file(self, tmp_path):
+        data = {
+            "images": [
+                {"id": 1, "file_name": "a.png", "width": 64, "height": 64},
+                {"id": 2, "file_name": "b.png", "width": 64, "height": 64},
+                {"id": 3, "file_name": "c.png", "width": 64, "height": 64},
+            ],
+            "annotations": [
+                {"id": 1, "image_id": 1, "category_id": 1,
+                 "segmentation": [[0, 0, 10, 0, 10, 10, 0, 10]]},
+                {"id": 2, "image_id": 1, "category_id": 26,  # stenosis — must be excluded
+                 "segmentation": [[5, 5, 15, 5, 15, 15, 5, 15]]},
+                {"id": 3, "image_id": 2, "category_id": 1,
+                 "segmentation": [[20, 20, 30, 20, 30, 30, 20, 30]]},
+                # image 3 has no annotations → excluded from image_ids
+            ],
+            "categories": [{"id": 1, "name": "vessel"}, {"id": 26, "name": "stenosis"}],
+        }
+        path = tmp_path / "ann.json"
+        path.write_text(json.dumps(data))
+        return str(path)
+
+    def test_returns_three_values(self, coco_file):
+        result = load_coco_annotations(coco_file)
+        assert len(result) == 3
+
+    def test_id_to_info_has_all_images(self, coco_file):
+        id_to_info, _, _ = load_coco_annotations(coco_file)
+        assert set(id_to_info.keys()) == {1, 2, 3}
+
+    def test_stenosis_excluded(self, coco_file):
+        _, anns_by_image, _ = load_coco_annotations(coco_file)
+        for anns in anns_by_image.values():
+            for ann in anns:
+                assert ann['category_id'] != STENOSIS_CATEGORY_ID
+
+    def test_image_ids_only_annotated(self, coco_file):
+        _, _, image_ids = load_coco_annotations(coco_file)
+        assert 3 not in image_ids  # image 3 has no vessel annotations
+
+    def test_image_ids_contains_annotated(self, coco_file):
+        _, _, image_ids = load_coco_annotations(coco_file)
+        assert 1 in image_ids
+        assert 2 in image_ids
+
+    def test_stenosis_only_image_excluded_from_ids(self, tmp_path):
+        data = {
+            "images": [{"id": 1, "file_name": "a.png", "width": 64, "height": 64}],
+            "annotations": [
+                {"id": 1, "image_id": 1, "category_id": 26,
+                 "segmentation": [[0, 0, 10, 0, 10, 10]]},
+            ],
+            "categories": [],
+        }
+        path = tmp_path / "ann.json"
+        path.write_text(json.dumps(data))
+        _, _, image_ids = load_coco_annotations(str(path))
+        assert 1 not in image_ids  # only stenosis → no valid annotations

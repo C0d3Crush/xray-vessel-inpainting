@@ -17,10 +17,8 @@ Usage:
 """
 
 import argparse
-import json
 import os
 import random
-from collections import defaultdict
 from pathlib import Path
 
 import cv2
@@ -28,23 +26,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 from tqdm import tqdm
 
-
-STENOSIS_CATEGORY_ID = 26
-
-
-def load_coco(ann_path):
-    """Load COCO annotations and group by image."""
-    with open(ann_path) as f:
-        coco = json.load(f)
-
-    id_to_info = {img['id']: img for img in coco['images']}
-    anns_by_image = defaultdict(list)
-
-    for ann in coco['annotations']:
-        if ann['category_id'] != STENOSIS_CATEGORY_ID:
-            anns_by_image[ann['image_id']].append(ann)
-
-    return id_to_info, anns_by_image
+from coco_utils import load_coco_annotations
 
 
 def rasterize_mask(annotations, width, height):
@@ -214,14 +196,8 @@ def main():
 
     # Load COCO
     print(f"Loading annotations from {args.annotations}...")
-    id_to_info, anns_by_image = load_coco(args.annotations)
+    id_to_info, anns_by_image, image_ids = load_coco_annotations(args.annotations)
     print(f"  Found {len(id_to_info)} images")
-
-    # Filter images that have annotations
-    image_ids = [
-        img_id for img_id in id_to_info
-        if anns_by_image[img_id]
-    ]
     print(f"  {len(image_ids)} images with vessel annotations")
 
     # Create output directory

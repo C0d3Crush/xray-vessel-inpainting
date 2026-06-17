@@ -10,35 +10,21 @@ import argparse
 import os
 import json
 import random
+import sys
 import numpy as np
 import cv2
 import torch
 import torch.nn.functional as F
 from PIL import Image, ImageDraw
 from pathlib import Path
-import sys
+
+from coco_utils import load_coco_annotations
 
 # Add src to path
 sys.path.append('src')
 from network.network_pro import Inpaint
 from utils import load_checkpoint
 
-def load_coco_annotations(ann_path):
-    """Load COCO annotations and create lookup tables."""
-    with open(ann_path) as f:
-        coco = json.load(f)
-    
-    id_to_info = {img['id']: img for img in coco['images']}
-    anns_by_image = {}
-    
-    for ann in coco['annotations']:
-        if ann['category_id'] != 26:  # Exclude stenosis
-            image_id = ann['image_id']
-            if image_id not in anns_by_image:
-                anns_by_image[image_id] = []
-            anns_by_image[image_id].append(ann)
-    
-    return id_to_info, anns_by_image
 
 def generate_vessel_mask(annotations, width, height, padding=0):
     """Generate vessel mask from COCO annotations with optional dilation padding."""
@@ -156,8 +142,7 @@ def main():
     
     # Load annotations
     print(f"Loading annotations from {args.annotations}...")
-    id_to_info, anns_by_image = load_coco_annotations(args.annotations)
-    available_ids = list(anns_by_image.keys())
+    id_to_info, anns_by_image, available_ids = load_coco_annotations(args.annotations)
     print(f"Found {len(available_ids)} images with vessel annotations")
     
     # Select random images

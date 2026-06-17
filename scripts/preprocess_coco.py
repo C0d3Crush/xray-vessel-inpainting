@@ -18,11 +18,9 @@ Usage:
 import argparse
 import json
 import pickle
-from collections import defaultdict
 from pathlib import Path
 
-
-STENOSIS_CATEGORY_ID = 26
+from coco_utils import load_coco_annotations
 
 
 def preprocess_coco(ann_path):
@@ -31,19 +29,7 @@ def preprocess_coco(ann_path):
     with open(ann_path) as f:
         coco = json.load(f)
 
-    # Build lookup dicts
-    id_to_info = {img['id']: img for img in coco['images']}
-    anns_by_image = defaultdict(list)
-
-    for ann in coco['annotations']:
-        if ann['category_id'] != STENOSIS_CATEGORY_ID:
-            anns_by_image[ann['image_id']].append(ann)
-
-    # Filter images with annotations
-    image_ids = [
-        img_id for img_id in id_to_info
-        if anns_by_image[img_id]
-    ]
+    id_to_info, anns_by_image, image_ids = load_coco_annotations(ann_path)
 
     preprocessed = {
         'id_to_info': id_to_info,
