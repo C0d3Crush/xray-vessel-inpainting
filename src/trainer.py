@@ -71,6 +71,9 @@ def train_model(
     # Google Drive mirroring (Colab only)
     drive_dir=None,
 
+    # Automatic Mixed Precision (CUDA only — ignored on CPU/MPS)
+    amp=False,
+
     # Callback for real-time monitoring (notebook integration)
     epoch_callback=None
 ):
@@ -147,6 +150,12 @@ def train_model(
                                 mask_weight=mask_weight,
                                 valid_weight=valid_weight).to(device)
 
+    # ---- AMP setup ----
+    use_amp = amp and device.type == 'cuda'
+    scaler  = torch.cuda.amp.GradScaler(enabled=use_amp)
+    if use_amp:
+        print("  AMP enabled: using float16 for forward pass")
+
     # ---- Training loop ----
     best_val_psnr = 0.0
     log_path = os.path.join(output_dir, 'training_log.csv')
@@ -178,17 +187,20 @@ def train_model(
         for img, mask in prog:
             img, mask = img.to(device), mask.to(device)
             optimizer.zero_grad()
-            output = model(img, mask)
-            loss, _ = criterion(output, img, mask)
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                output = model(img, mask)
+                loss, _ = criterion(output, img, mask)
 
             if not torch.isfinite(loss):
                 print(f"\nWarning: non-finite loss ({loss.item()}) at epoch {epoch} — skipping batch")
                 optimizer.zero_grad()
                 continue
 
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             train_loss += loss.item()
             prog.set_postfix(loss=f"{loss.item():.4f}")
@@ -209,7 +221,8 @@ def train_model(
         with torch.no_grad():
             for img, mask in tqdm(val_loader, desc=f"Epoch {epoch}/{epochs} [val]"):
                 img, mask = img.to(device), mask.to(device)
-                output = model(img, mask)
+                with torch.cuda.amp.autocast(enabled=use_amp):
+                    output = model(img, mask)
 
                 # Calculate validation loss
                 loss, loss_components = criterion(output, img, mask)

@@ -35,6 +35,7 @@ def main():
     parser.add_argument('--vessel_safe_training', action='store_true',                        help='Generate vessel-safe background masks (no overlap with vessel annotations)')
     parser.add_argument('--no_background_training', dest='background_training', action='store_false', help='Disable background training mode (use vessel masks instead)')
     parser.add_argument('--drive_dir',           default=None,                                help='Google Drive directory to mirror checkpoints into (Colab only)')
+    parser.add_argument('--amp',                 action='store_true',                         help='Enable automatic mixed precision training (CUDA only, ~30-40%% speedup)')
     parser.set_defaults(background_training=True)
     args = parser.parse_args()
 
@@ -52,6 +53,7 @@ def main():
         patches_per_image=args.patches_per_image, foreground_prob=args.foreground_prob,
         max_shapes=args.max_shapes, vessel_safe_training=args.vessel_safe_training,
         background_training=args.background_training, drive_dir=args.drive_dir,
+        amp=args.amp,
     )
 
 
