@@ -123,8 +123,6 @@ scripts/                # Preprocessing and analysis utilities
 ├── visualize_results.py # Create side-by-side comparison visualizations
 ├── plot_training.py   # Plot training metrics (adaptive 3 or 5 metrics)
 ├── preprocess_coco.py # Convert COCO JSON to pickle for faster loading
-├── version.py         # Semantic versioning utility for releases
-├── commit-with-version.sh # Automated version-aware git commits
 └── optimize_parameters.py # Parameter optimization and grid search
 
 checkpoints/           # Model weights and logs (NOT outputs/checkpoints/)
@@ -188,21 +186,6 @@ All logged to `checkpoints/training_log.csv` with optional Google Drive mirrorin
 - `origin` → GitHub (main branch)  
 - `gitlab` → Uni Heidelberg GitLab (lukas/main, protected)
 
-**Semantic Versioning (v1.2.0+):**
-```bash
-# Show current version
-python scripts/version.py
-
-# Version-aware commits (recommended)
-./scripts/commit-with-version.sh "feat: add new feature"  # → v1.3.0
-./scripts/commit-with-version.sh "fix: resolve bug"       # → v1.2.1
-./scripts/commit-with-version.sh "docs: update readme"    # → v1.2.1
-
-# Manual versioning
-python scripts/version.py next feat    # Show next version
-python scripts/version.py next feat --write  # Update VERSION file
-```
-
 **Conventional Commit Types:**
 - `feat:` → minor version bump (1.0.0 → 1.1.0)
 - `fix:` → patch version bump (1.0.0 → 1.0.1)  
@@ -212,11 +195,10 @@ python scripts/version.py next feat --write  # Update VERSION file
 - **NO Co-Authored-By:** Never include "Co-Authored-By: Claude <noreply@anthropic.com>" in commit messages
 - **NO Generated with Claude Code:** Never include "🤖 Generated with [Claude Code](https://claude.ai/code)" in commit messages
 - **Clean commit messages:** Use only conventional commit format without Claude attribution
-- **Version tracking:** All commits should include version numbers using the automated workflow
 
 ## Important Notes
 
-- **Patch training recommended:** Use `--patch_mode` with `--patches_per_image 16` for best results
+- **Patch training recommended:** Use `--patches_per_image 16` for best results
 - **Checkpoint paths:** Use `checkpoints/` not `outputs/checkpoints/` (corrected from legacy docs)
 - **Stenosis exclusion:** COCO category ID 26 (stenosis) automatically filtered from vessel masks in `ArcadeDataset.__init__`
 - **Input size scaling:** SwinTransformer depth auto-adjusts: `max(2, int(log2(input_size)) - 4)`
