@@ -28,7 +28,7 @@ from tqdm import tqdm
 sys.path.append('src')
 
 class GridMaskGenerator:
-    def __init__(self, annotations_path, images_path, grid_size=64, safety_margin=8):
+    def __init__(self, annotations_path, images_path, grid_size=64, safety_margin=3):
         self.annotations_path = annotations_path
         self.images_path = images_path
         self.grid_size = grid_size
@@ -75,10 +75,9 @@ class GridMaskGenerator:
         """Create vessel exclusion zone with safety margin."""
         vessel_np = np.array(vessel_mask, dtype=np.uint8)
         
-        # Create moderate safety margin - prevent overlap but allow distribution
-        kernel_size = max(5, self.safety_margin + 1)
+        kernel_size = self.safety_margin * 2 + 1  # radius = safety_margin px
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        vessel_exclusion = cv2.dilate(vessel_np, kernel, iterations=1)  # Single iteration for minimal margin
+        vessel_exclusion = cv2.dilate(vessel_np, kernel, iterations=1)
         
         return vessel_exclusion
     

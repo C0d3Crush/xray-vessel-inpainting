@@ -72,14 +72,13 @@ class GridPatchOverview:
                         draw.polygon(xy, fill=255)
         return mask
 
-    def create_vessel_exclusion_mask(self, vessel_mask, safety_margin=15):
+    def create_vessel_exclusion_mask(self, vessel_mask, safety_margin=3):
         """Create vessel exclusion zone with safety margin."""
         vessel_np = np.array(vessel_mask, dtype=np.uint8)
         
-        # Create enhanced safety margin matching generate_grid_masks.py
-        kernel_size = max(5, safety_margin * 2 + 1)
+        kernel_size = safety_margin * 2 + 1  # radius = safety_margin px
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        vessel_exclusion = cv2.dilate(vessel_np, kernel, iterations=2)  # Double iterations
+        vessel_exclusion = cv2.dilate(vessel_np, kernel, iterations=1)
         
         return vessel_exclusion
 

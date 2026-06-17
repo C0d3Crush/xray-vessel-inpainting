@@ -87,11 +87,12 @@ Input X-ray → ArcadeDataset → Inpaint Model → InpaintingLoss
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| **ArcadeDataset** | `src/train.py:21-162` | COCO annotation parsing, mask generation, grayscale normalization [-1,1] |
+| **ArcadeDataset** | `src/dataset.py` | COCO annotation parsing, mask generation, grayscale normalization [-1,1] |
 | **Inpaint** | `src/network/network_pro.py:6-23` | Main model: ViT coarse stage + SwinTransformer refinement |
 | **ViT (Coarse)** | `src/network/vit.py` | 15-layer continuously masked transformer encoder with window partitioning |
 | **Refine (Fine)** | `src/network/refine.py:16-85` | SwinTransformer U-Net decoder with adaptive depth scaling |
-| **Loss** | `src/train.py:205-218` | Combined L1 (masked×6.0 + valid×1.0) + SSIM×0.5 |
+| **Loss** | `src/losses.py:22` | Combined L1 (masked×6.0 + valid×1.0) + SSIM×0.5 |
+| **Trainer** | `src/trainer.py` | Training loop, validation, checkpoint management |
 
 ### Data Flow Architecture
 1. **ArcadeDataset** loads grayscale X-rays + generates masks from COCO vessel polygons (excluding stenosis category 26)
@@ -104,7 +105,10 @@ Input X-ray → ArcadeDataset → Inpaint Model → InpaintingLoss
 
 ```
 src/                     # Core implementation
-├── train.py            # Main training script, ArcadeDataset, loss functions
+├── train.py            # Entry point: argument parsing, orchestrates training
+├── dataset.py          # ArcadeDataset: COCO parsing, mask generation, patch extraction
+├── losses.py           # InpaintingLoss: L1 (masked×6.0 + valid×1.0) + SSIM×0.5
+├── trainer.py          # Training loop, validation, checkpoint management
 ├── demo.py             # Inference script
 ├── utils.py            # Checkpoint loading, PSNR/SSIM/Wasserstein/RMSE metrics
 └── network/
@@ -234,11 +238,12 @@ python scripts/version.py next feat --write  # Update VERSION file
 - **Adaptive depth:** Automatically scales based on input size to maintain minimum 4×4 spatial resolution
 - **Skip connections:** Between encoder stages and decoder upsampling blocks
 
-### Loss Function (`src/train.py:205-218`)
+### Loss Function (`src/losses.py:22`)
 ```python
-l1_loss = F.l1_loss(gen * mask, real * mask) * 6.0 + F.l1_loss(gen * (1 - mask), real * (1 - mask)) * 1.0
-ssim_loss = 1 - ssim_fn(gen_np, real_np, data_range=2.0, channel_axis=0)
-total_loss = l1_loss + ssim_loss * 0.5
+loss_mask  = l1(output * mask,       target * mask)       * mask_weight   # default 6.0
+loss_valid = l1(output * (1 - mask), target * (1 - mask)) * valid_weight  # default 1.0
+loss_ssim  = 1 - ssim(output, target)                     * ssim_weight   # default 0.5
+total_loss = loss_mask + loss_valid + loss_ssim
 ```
 - **Weighted L1:** 6× penalty on masked regions, 1× on valid regions
 - **SSIM penalty:** Structural similarity with 0.5× weight
