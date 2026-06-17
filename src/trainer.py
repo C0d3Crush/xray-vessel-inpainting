@@ -68,6 +68,9 @@ def train_model(
     vessel_safe_training=False,
     background_training=True,
 
+    # Google Drive mirroring (Colab only)
+    drive_dir=None,
+
     # Callback for real-time monitoring (notebook integration)
     epoch_callback=None
 ):
@@ -145,14 +148,12 @@ def train_model(
     best_val_psnr = 0.0
     log_path = os.path.join(output_dir, 'training_log.csv')
 
-    # Drive paths for Colab
-    drive_ckpt_dir = '/content/drive/MyDrive/CMT/checkpoints'
-    use_drive = os.path.isdir(drive_ckpt_dir)
+    use_drive = drive_dir is not None and os.path.isdir(drive_dir)
     if use_drive:
-        os.makedirs(drive_ckpt_dir, exist_ok=True)
-        print(f"  Drive mounted: checkpoints will be mirrored to {drive_ckpt_dir}")
+        os.makedirs(drive_dir, exist_ok=True)
+        print(f"  Drive mounted: checkpoints will be mirrored to {drive_dir}")
 
-    drive_log_path = os.path.join(drive_ckpt_dir, 'training_log.csv') if use_drive else None
+    drive_log_path = os.path.join(drive_dir, 'training_log.csv') if use_drive else None
 
     csv_header = 'epoch,train_loss,val_loss,val_l1_loss,val_ssim_loss,val_psnr,val_ssim,val_wasserstein,val_rmse,val_kl_divergence,loss_change,psnr_realistic,learning_pattern\n'
     with open(log_path, 'w') as f:
@@ -282,21 +283,21 @@ def train_model(
             best_path = os.path.join(output_dir, 'best.pth')
             save_checkpoint(model, optimizer, epoch, best_path, metrics={'train_loss': train_loss})
             if use_drive:
-                drive_best = os.path.join(drive_ckpt_dir, 'best.pth')
+                drive_best = os.path.join(drive_dir, 'best.pth')
                 save_checkpoint(model, optimizer, epoch, drive_best, metrics={'train_loss': train_loss})
 
         if epoch % save_every == 0:
             epoch_path = os.path.join(output_dir, f'epoch_{epoch:03d}.pth')
             save_checkpoint(model, optimizer, epoch, epoch_path, metrics={'train_loss': train_loss})
             if use_drive:
-                drive_epoch = os.path.join(drive_ckpt_dir, f'epoch_{epoch:03d}.pth')
+                drive_epoch = os.path.join(drive_dir, f'epoch_{epoch:03d}.pth')
                 save_checkpoint(model, optimizer, epoch, drive_epoch, metrics={'train_loss': train_loss})
 
             # Rotate old checkpoints
             if keep_checkpoints > 0:
                 rotate_checkpoints(output_dir, keep_checkpoints)
                 if use_drive:
-                    rotate_checkpoints(drive_ckpt_dir, keep_checkpoints)
+                    rotate_checkpoints(drive_dir, keep_checkpoints)
 
     print(f"\nTraining complete. Best val PSNR: {best_val_psnr:.2f} dB")
     print(f"Checkpoints in: {output_dir}/")

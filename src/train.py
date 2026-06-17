@@ -34,6 +34,7 @@ def main():
     parser.add_argument('--max_shapes',       type=int,   default=5,                          help='Maximum number of random shapes added to generated masks')
     parser.add_argument('--vessel_safe_training', action='store_true',                        help='Generate vessel-safe background masks (no overlap with vessel annotations)')
     parser.add_argument('--no_background_training', dest='background_training', action='store_false', help='Disable background training mode (use vessel masks instead)')
+    parser.add_argument('--drive_dir',           default=None,                                help='Google Drive directory to mirror checkpoints into (Colab only)')
     parser.set_defaults(background_training=True)
     args = parser.parse_args()
 
@@ -50,7 +51,7 @@ def main():
         mask_weight=args.mask_weight, valid_weight=args.valid_weight,
         patches_per_image=args.patches_per_image, foreground_prob=args.foreground_prob,
         max_shapes=args.max_shapes, vessel_safe_training=args.vessel_safe_training,
-        background_training=args.background_training,
+        background_training=args.background_training, drive_dir=args.drive_dir,
     )
 
 
