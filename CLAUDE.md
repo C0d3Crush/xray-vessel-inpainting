@@ -123,7 +123,6 @@ scripts/                # Preprocessing and analysis utilities
 ├── visualize_results.py # Create side-by-side comparison visualizations
 ├── plot_training.py   # Plot training metrics (adaptive 3 or 5 metrics)
 ├── preprocess_coco.py # Convert COCO JSON to pickle for faster loading
-└── optimize_parameters.py # Parameter optimization and grid search
 
 checkpoints/           # Model weights and logs (NOT outputs/checkpoints/)
 ├── best.pth          # Best validation PSNR checkpoint
