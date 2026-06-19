@@ -67,7 +67,7 @@ pip install -r requirements.txt
 
 **Core dependencies:** PyTorch 2.2.2, timm 1.0.26, torchvision 0.17.2, scikit-image, OpenCV, einops
 
-> **Training:** All training must be run on Google Colab (GPU required). Local machine is for development, inference, and visualization only.
+> **⚠️ Training location:** NEVER run training or smoke tests on a local machine. ALL training must run on Google Colab (GPU required). Local machine is for code development, inference with existing checkpoints, and visualization only.
 
 ---
 
@@ -132,21 +132,54 @@ python src/train.py --vessel_safe_training --input_size 64 --epochs 100 --device
 python src/train.py --ckpt checkpoints/best.pth --epochs 150 --device cuda
 ```
 
-### Key arguments
+### Arguments
+
+**Paths**
 
 | Argument | Default | Description |
 |---|---|---|
+| `--train_img` | — | Training images directory |
+| `--train_ann` | — | Training COCO annotation JSON |
+| `--val_img` | — | Validation images directory |
+| `--val_ann` | — | Validation COCO annotation JSON |
+| `--train_mask` | — | Precomputed training masks directory (skips on-the-fly generation) |
+| `--val_mask` | — | Precomputed validation masks directory |
+| `--output_dir` | `checkpoints` | Checkpoint and log output directory |
+| `--ckpt` | — | Resume training from checkpoint |
+
+**Training**
+
+| Argument | Default | Description |
+|---|---|---|
+| `--device` | `cpu` | Training device (`cpu` or `cuda`) |
 | `--epochs` | 100 | Training epochs |
 | `--batch_size` | 4 | Batch size |
-| `--input_size` | 256 | Model input size (power of 2, min 64) |
 | `--lr` | 1e-4 | Learning rate |
-| `--patches_per_image` | 4 | Patches extracted per image |
-| `--foreground_prob` | 0.75 | Probability of vessel-biased patch sampling |
-| `--vessel_safe_training` | — | Guarantee zero vessel-mask overlap |
-| `--mask_weight` | 6.0 | L1 weight for masked region |
-| `--ssim_weight` | 0.5 | SSIM loss weight |
+| `--num_workers` | 0 | DataLoader worker processes |
+| `--save_every` | — | Save epoch checkpoint every N epochs |
 | `--keep_checkpoints` | 3 | Number of top checkpoints to retain |
-| `--smoke_test` | — | Quick 1-epoch test |
+| `--amp` | — | Mixed precision training (CUDA only, ~30–40% speedup) |
+| `--smoke_test` | — | Quick 1-epoch pipeline verification |
+| `--drive_dir` | — | Google Drive directory for checkpoint mirroring (Colab only) |
+
+**Model & Data**
+
+| Argument | Default | Description |
+|---|---|---|
+| `--input_size` | 256 | Patch size in pixels (power of 2, min 64) |
+| `--patches_per_image` | 4 | Patches extracted per image per epoch |
+| `--foreground_prob` | 0.75 | Probability of vessel-biased patch sampling |
+| `--random_masks` | — | Use random vessel-padded masks instead of COCO annotations |
+| `--mask_padding` | — | Vessel mask dilation radius (pixels) |
+| `--vessel_safe_training` | — | Guarantee zero vessel-mask overlap |
+
+**Loss**
+
+| Argument | Default | Description |
+|---|---|---|
+| `--mask_weight` | 6.0 | L1 weight on masked (vessel) regions |
+| `--valid_weight` | 1.0 | L1 weight on valid (background) regions |
+| `--ssim_weight` | 0.5 | SSIM loss weight |
 
 ---
 
@@ -163,19 +196,70 @@ All metrics logged to `checkpoints/training_log.csv`.
 
 ---
 
+## Workflow Guide
+
+| Goal | Command |
+|---|---|
+| Verify pipeline works end-to-end | `make smoke-test` |
+| Standard patch training | `make train` |
+| Training with guaranteed vessel-free masks | `make vessel-safe-train` |
+| Evaluate model on real 64×64 patches | `make patch-comparison` |
+| Generate grid masks + overview visualization | `make grid-workflow` |
+| Precompute masks for faster training | `make cache-data` |
+
+**When to use vessel-safe training:** Use `vessel-safe-train` when you need guaranteed zero overlap between vessel structures and generated masks. The standard `train` target uses COCO vessel annotations directly as masks; vessel-safe uses the grid system's background-only regions.
+
+---
+
 ## Makefile Targets
 
+**Data & Setup**
+
 ```bash
-make install                  # Install dependencies
-make cache-data               # Precompute masks (10× speedup)
-make smoke-test               # Quick pipeline test (1 epoch, CPU)
-make train                    # Full training
-make vessel-safe-train        # Training with vessel-safe masks
-make patch-comparison         # End-to-end: prepare + inference + visualize
-make inference                # Run inference on prepared samples
-make plot                     # Plot training curves
-make grid-workflow            # Grid mask generation + overview
-make clean                    # Remove checkpoints and logs
+make install                    # Install dependencies
+make cache-data                 # Precompute masks (10× speedup)
+make prepare-patch-samples      # Extract 64×64 patches for visualization
+```
+
+**Training**
+
+```bash
+make smoke-test                 # Quick pipeline verification (1 epoch, CPU)
+make train                      # Standard patch training
+make vessel-safe-train          # Training with zero vessel-mask overlap
+```
+
+**Inference & Visualization**
+
+```bash
+make inference                  # Run inference on prepared samples
+make patch-comparison           # End-to-end: prepare + inference + visualize
+make training-comparison        # Create side-by-side comparison visualization
+make plot                       # Plot training curves from CSV
+make mask-overview              # Comprehensive mask and vessel overview
+```
+
+**Grid System**
+
+```bash
+make grid-patches               # Generate 8×8 grid patches with vessel-safe masks
+make grid-workflow              # mask-overview + grid-patches in sequence
+```
+
+**Testing**
+
+```bash
+make test                       # Full test suite
+make test-unit                  # Unit tests only
+make test-integration           # Integration tests only
+make test-fast                  # Fast tests (excludes slow/GPU/data tests)
+make test-coverage              # Tests with HTML coverage report
+```
+
+**Maintenance**
+
+```bash
+make clean                      # Remove checkpoints and logs
 ```
 
 ---
@@ -184,14 +268,16 @@ make clean                    # Remove checkpoints and logs
 
 | Script | Purpose |
 |---|---|
+| `scripts/prepare_samples.py` | Extract full-resolution samples from ARCADE dataset |
+| `scripts/cache_masks.py` | Precompute vessel masks from COCO annotations |
+| `scripts/preprocess_coco.py` | Convert COCO JSON → pickle cache (instant loading) |
 | `scripts/patch_inference.py` | Extract real 64×64 patches and run inference (no resizing) |
 | `scripts/generate_grid_masks.py` | Systematic 8×8 grid patches with vessel-safe masks |
 | `scripts/create_grid_overview.py` | Grid visualization with coverage heatmaps |
-| `scripts/cache_masks.py` | Precompute vessel masks from COCO annotations |
 | `scripts/create_training_comparison.py` | Side-by-side Original / Mask / Result visualizations |
+| `scripts/create_mask_overview.py` | Comprehensive mask and vessel annotation overview |
 | `scripts/plot_training.py` | Training metrics plots (3 or 5 metrics, auto-detected) |
-| `scripts/preprocess_coco.py` | Convert COCO JSON → pickle cache (instant loading) |
-| `scripts/optimize_parameters.py` | Grid search and parameter optimization |
+| `scripts/coco_utils.py` | Shared COCO annotation utilities |
 
 ---
 
@@ -204,6 +290,10 @@ outputs/
 │   ├── mask/              # Vessel masks
 │   ├── result/            # Inpainted results
 │   └── comparison.png     # Side-by-side visualization
+├── grid_patches/
+│   ├── images/            # 8×8 grid patches
+│   └── masks/             # Vessel-safe grid masks
+├── mask_overview/         # Mask and vessel annotation overview
 ├── complete_demo/
 │   ├── patches/           # Grid patches
 │   ├── masks/             # Grid masks
@@ -253,8 +343,8 @@ For systematic training coverage with guaranteed zero vessel overlap:
 python scripts/generate_grid_masks.py \
   --annotations data/arcade/syntax/val/annotations/val.json \
   --images data/arcade/syntax/val/images \
-  --output-img outputs/grid_demo/patches \
-  --output-mask outputs/grid_demo/masks \
+  --output-img outputs/grid_patches/images \
+  --output-mask outputs/grid_patches/masks \
   --num-images 2 --grid-size 64
 
 # Create overview visualization
