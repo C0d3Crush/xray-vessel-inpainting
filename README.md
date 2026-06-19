@@ -67,44 +67,9 @@ pip install -r requirements.txt
 
 **Core dependencies:** PyTorch 2.2.2, timm 1.0.26, torchvision 0.17.2, scikit-image, OpenCV, einops
 
-> **⚠️ Training location:** NEVER run training or smoke tests on a local machine. ALL training must run on Google Colab (GPU required). Local machine is for code development, inference with existing checkpoints, and visualization only.
-
 ---
 
-## Quick Start
-
-### Prepare data cache (10× faster training)
-```bash
-make cache-data
-```
-
-### Run inference on existing checkpoint
-```bash
-python scripts/patch_inference.py \
-  --ckpt checkpoints/best.pth \
-  --annotations data/arcade/syntax/val/annotations/val.json \
-  --images data/arcade/syntax/val/images \
-  --output-dir outputs/vessel_safe_patches \
-  --num-images 4 --patches-per-image 3
-```
-
-### Create visual comparison
-```bash
-python scripts/create_training_comparison.py \
-  --patch-img outputs/vessel_safe_patches/original \
-  --patch-mask outputs/vessel_safe_patches/mask \
-  --patch-result outputs/vessel_safe_patches/result \
-  --output outputs/vessel_safe_patches/comparison.png
-```
-
-### Plot training metrics
-```bash
-python scripts/plot_training.py checkpoints/training_log.csv
-```
-
----
-
-## Training (Google Colab)
+## Training
 
 ### Basic patch training
 ```bash
