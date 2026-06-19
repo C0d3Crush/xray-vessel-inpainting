@@ -20,4 +20,4 @@ class Inpaint(nn.Module):
             c_gen_.append((c_g * mask) + img * (1 - mask))
         gen = self.refine(torch.cat(c_gen_ + [mask], 1))
         gen = (gen * mask) + img * (1 - mask)
-        return gen
+        return torch.clamp(gen, -1.0, 1.0)
