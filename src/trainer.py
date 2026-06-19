@@ -12,7 +12,7 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 from network.network_pro import Inpaint
-from utils import load_checkpoint, save_checkpoint, rotate_checkpoints, wasserstein_distance_2d, calculate_kl_divergence
+from utils import load_checkpoint, save_checkpoint, rotate_checkpoints, wasserstein_distance_2d_batch, calculate_kl_divergence_batch
 from dataset import ArcadeDataset, DatasetConfig
 from losses import InpaintingLoss, ssim_fn
 
@@ -248,12 +248,10 @@ def train_model(
                                      20 * np.log10(255.0 / np.sqrt(np.maximum(mse_per, 1e-10)))).sum()
                 val_rmse += np.sqrt(mse_per).sum()
 
-                # Per-sample metrics that don't support batch computation
-                for o, g in zip(out_np, gt_np):
-                    val_ssim += ssim_fn(o, g, data_range=255.0, channel_axis=None)
-                    val_wasserstein += wasserstein_distance_2d(o, g)
-                    val_kl_divergence += calculate_kl_divergence(o, g)
-                    val_num_samples += 1
+                val_ssim += sum(ssim_fn(o, g, data_range=255.0, channel_axis=None) for o, g in zip(out_np, gt_np))
+                val_wasserstein += wasserstein_distance_2d_batch(out_np, gt_np).sum()
+                val_kl_divergence += calculate_kl_divergence_batch(out_np, gt_np).sum()
+                val_num_samples += len(out_np)
 
         val_loss /= len(val_loader)
         val_l1_loss /= len(val_loader)

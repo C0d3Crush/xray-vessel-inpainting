@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+import subprocess
 import torch
 import numpy as np
 from collections import defaultdict
@@ -63,12 +65,24 @@ def load_checkpoint(path, model, device, optimizer=None, reset_optimizer=True, i
     return model
 
 
+def _git_hash():
+    try:
+        return subprocess.check_output(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            stderr=subprocess.DEVNULL,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+        ).decode().strip()
+    except Exception:
+        return 'unknown'
+
+
 def save_checkpoint(model, optimizer, epoch, path, metrics=None):
     """Save model checkpoint with metrics"""
     checkpoint = {
         'state_dict': model.state_dict(),
         'optimizer': optimizer.state_dict() if optimizer else None,
-        'epoch': epoch
+        'epoch': epoch,
+        'git_hash': _git_hash(),
     }
     if metrics:
         checkpoint.update(metrics)
@@ -110,6 +124,33 @@ def psnr(img1, img2):
 def rmse(img1, img2):
     """Root Mean Square Error between two images."""
     return np.sqrt(np.mean((img1 - img2) ** 2))
+
+def wasserstein_distance_2d_batch(imgs1, imgs2):
+    """Wasserstein distance for a batch. imgs1, imgs2: (B, H, W) in [0, 255]. Returns (B,) array."""
+    if not SCIPY_AVAILABLE:
+        flat1 = imgs1.reshape(len(imgs1), -1)
+        flat2 = imgs2.reshape(len(imgs2), -1)
+        return np.mean(np.abs(np.sort(flat1, axis=1) - np.sort(flat2, axis=1)), axis=1)
+    return np.array([wasserstein_distance(imgs1[i].flatten(), imgs2[i].flatten()) for i in range(len(imgs1))])
+
+
+def calculate_kl_divergence_batch(imgs1, imgs2, bins=256, epsilon=1e-10):
+    """KL divergence for a batch. imgs1, imgs2: (B, H, W). Returns (B,) array."""
+    B = imgs1.shape[0]
+    flat1 = imgs1.reshape(B, -1).astype(np.float64)
+    flat2 = imgs2.reshape(B, -1).astype(np.float64)
+    mn1 = flat1.min(axis=1, keepdims=True)
+    mx1 = flat1.max(axis=1, keepdims=True)
+    mn2 = flat2.min(axis=1, keepdims=True)
+    mx2 = flat2.max(axis=1, keepdims=True)
+    flat1 = (flat1 - mn1) / (mx1 - mn1 + epsilon)
+    flat2 = (flat2 - mn2) / (mx2 - mn2 + epsilon)
+    hist1 = np.array([np.histogram(flat1[i], bins=bins, range=(0, 1), density=True)[0] for i in range(B)])
+    hist2 = np.array([np.histogram(flat2[i], bins=bins, range=(0, 1), density=True)[0] for i in range(B)])
+    hist1 = hist1 / hist1.sum(axis=1, keepdims=True) + epsilon
+    hist2 = hist2 / hist2.sum(axis=1, keepdims=True) + epsilon
+    return np.sum(hist1 * np.log(hist1 / hist2), axis=1)
+
 
 def wasserstein_distance_2d(img1, img2):
     """
