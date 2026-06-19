@@ -59,16 +59,6 @@ loss = L1(output * mask, target * mask) * 6.0       # Masked region (heavy penal
 
 ---
 
-## Setup
-
-```bash
-pip install -r requirements.txt
-```
-
-**Core dependencies:** PyTorch 2.2.2, timm 1.0.26, torchvision 0.17.2, scikit-image, OpenCV, einops
-
----
-
 ## Training
 
 ### Basic patch training
@@ -77,14 +67,6 @@ python src/train.py \
   --epochs 100 --batch_size 4 \
   --input_size 64 --patches_per_image 16 \
   --device cuda
-```
-
-### With precomputed masks (recommended)
-```bash
-python src/train.py \
-  --train_mask data/masks_cache/train \
-  --val_mask data/masks_cache/val \
-  --device cuda --batch_size 16 --epochs 100
 ```
 
 ### Vessel-safe training (zero vessel-mask overlap)
@@ -162,17 +144,6 @@ All metrics logged to `checkpoints/training_log.csv`.
 ---
 
 ## Workflow Guide
-
-| Goal | Command |
-|---|---|
-| Verify pipeline works end-to-end | `make smoke-test` |
-| Standard patch training | `make train` |
-| Training with guaranteed vessel-free masks | `make vessel-safe-train` |
-| Evaluate model on real 64×64 patches | `make patch-comparison` |
-| Generate grid masks + overview visualization | `make grid-workflow` |
-| Precompute masks for faster training | `make cache-data` |
-
-**When to use vessel-safe training:** Use `vessel-safe-train` when you need guaranteed zero overlap between vessel structures and generated masks. The standard `train` target uses COCO vessel annotations directly as masks; vessel-safe uses the grid system's background-only regions.
 
 ---
 
