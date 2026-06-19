@@ -61,24 +61,6 @@ loss = L1(output * mask, target * mask) * 6.0       # Masked region (heavy penal
 
 ## Training
 
-### Basic patch training
-```bash
-python src/train.py \
-  --epochs 100 --batch_size 4 \
-  --input_size 64 --patches_per_image 16 \
-  --device cuda
-```
-
-### Vessel-safe training (zero vessel-mask overlap)
-```bash
-python src/train.py --vessel_safe_training --input_size 64 --epochs 100 --device cuda
-```
-
-### Resume from checkpoint
-```bash
-python src/train.py --ckpt checkpoints/best.pth --epochs 150 --device cuda
-```
-
 ### Arguments
 
 **Paths**
