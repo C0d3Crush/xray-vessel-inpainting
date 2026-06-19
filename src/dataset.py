@@ -509,10 +509,19 @@ class ArcadeDataset(Dataset):
             # Choose mask generation strategy based on training mode
             if self.background_training:
                 if self.vessel_safe_training:
-                    # NEW: Generate vessel-safe background masks using Grid-System logic
+                    # Strict: zero overlap tolerance, large dilation margin
                     mask_pil, _ = self._create_vessel_safe_mask(image_id, W, H)
                 else:
-                    mask_pil, _ = self._create_vessel_safe_mask(image_id, W, H)
+                    # Standard: no overlap, smaller dilation margin — faster generation
+                    mask_pil, _ = self._generate_vessel_free_mask(
+                        image_id, W, H,
+                        dilation_margin=10,
+                        overlap_tolerance=0.0,
+                        shape_types=['circle', 'rectangle', 'ellipse', 'triangle', 'line', 'blob'],
+                        max_attempts=100,
+                        min_coverage=0.05,
+                        max_coverage=0.25,
+                    )
             else:
                 # INFERENCE: Generate vessel masks (for vessel removal)
                 base_mask_pil = self._make_mask_from_annotations(image_id, W, H)
