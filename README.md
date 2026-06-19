@@ -114,12 +114,12 @@ loss = L1(output * mask, target * mask) * 6.0       # Masked region (heavy penal
 
 ## Metrics
 
-| Metric | Description |
+| Metric | Value |
 |---|---|
-| PSNR | Peak Signal-to-Noise Ratio |
-| SSIM | Structural Similarity Index |
-| RMSE | Root Mean Square Error |
-| Wasserstein | Distribution divergence (Earth Mover's Distance) |
+| PSNR | - |
+| SSIM | - |
+| RMSE | - |
+| Wasserstein | - |
 
 All metrics logged to `checkpoints/training_log.csv`.
 
