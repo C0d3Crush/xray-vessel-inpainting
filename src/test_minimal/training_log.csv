@@ -1,2 +1,0 @@
-epoch,train_loss,val_loss,val_l1_loss,val_ssim_loss,val_psnr,val_ssim,val_wasserstein,val_rmse,val_kl_divergence
-1,0.0333,0.0505,0.0249,0.0256,37.94,0.9680,0.4631,3.2314,0.0060
