@@ -3,8 +3,11 @@
 Patch inference that outputs 64x64 results for proper visualization
 """
 
-import argparse, os, cv2, glob
+import argparse, logging, os, cv2, glob
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
+logger = logging.getLogger(__name__)
 from network.network_pro import Inpaint
 from tqdm import tqdm
 from utils import *
@@ -70,7 +73,4 @@ for mask_fn in prog_bar:
     prog_bar.set_postfix({"PSNR": f"{psnr_score:.2f}"})
 
 avg_psnr = np.mean(psnr_scores) if psnr_scores else 0
-print(f"\n✓ Patch inference complete!")
-print(f"  Processed: {len(psnr_scores)} patches (64×64)")
-print(f"  Average PSNR: {avg_psnr:.2f} dB")
-print(f"  Results: {args.output_path}")
+logger.info(f"Patch inference complete: {len(psnr_scores)} patches (64×64) | avg PSNR={avg_psnr:.2f} dB | results={args.output_path}")

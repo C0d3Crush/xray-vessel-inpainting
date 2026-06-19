@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import logging
 import random
 import numpy as np
 import torch
@@ -7,6 +8,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 from network.network_pro import Inpaint
 from utils import load_checkpoint, save_checkpoint, rotate_checkpoints, wasserstein_distance_2d, calculate_kl_divergence
@@ -87,6 +90,11 @@ def train_model(
     Returns:
         dict: Training results including best_val_psnr, log_path, final_metrics
     """
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%H:%M:%S',
+    )
     set_seed(seed)
 
     os.makedirs(output_dir, exist_ok=True)
@@ -113,13 +121,13 @@ def train_model(
     val_dataset   = ArcadeDataset(val_img,   val_ann,   val_cfg)
 
     if train_mask:
-        print(f"  Using precomputed train masks from: {train_mask}")
+        logger.info(f"Using precomputed train masks from: {train_mask}")
     elif random_masks:
-        print(f"  Generating random masks around vessel regions (padding: {mask_padding}px)")
+        logger.info(f"Generating random masks around vessel regions (padding: {mask_padding}px)")
     elif vessel_safe_training:
-        print(f"  Generating vessel-safe background masks (SLOW - consider using --train_mask for speed)")
+        logger.warning("Generating vessel-safe background masks (SLOW - consider using --train_mask for speed)")
     else:
-        print(f"  Generating train masks from COCO annotations")
+        logger.info("Generating train masks from COCO annotations")
 
     if smoke_test:
         train_dataset.image_ids = train_dataset.image_ids[:smoke_size]
@@ -133,15 +141,15 @@ def train_model(
 
     base_train_imgs = len(train_dataset.image_ids)
     base_val_imgs = len(val_dataset.image_ids)
-    print(f"Patch mode enabled: {patches_per_image} patches per image")
-    print(f"Train: {base_train_imgs} images → {len(train_dataset)} patches | Val: {base_val_imgs} images → {len(val_dataset)} patches")
+    logger.info(f"Patch mode enabled: {patches_per_image} patches per image")
+    logger.info(f"Train: {base_train_imgs} images → {len(train_dataset)} patches | Val: {base_val_imgs} images → {len(val_dataset)} patches")
 
     # ---- Model ----
     model = Inpaint(input_size=input_size).to(device)
 
     if ckpt and os.path.exists(ckpt):
         model = load_checkpoint(ckpt, model, device)
-        print(f"  Resumed from checkpoint: {ckpt}")
+        logger.info(f"Resumed from checkpoint: {ckpt}")
 
     # ---- Optimiser & Loss ----
     optimizer = optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.999))
@@ -154,7 +162,7 @@ def train_model(
     use_amp = amp and device.type == 'cuda'
     scaler  = torch.cuda.amp.GradScaler(enabled=use_amp)
     if use_amp:
-        print("  AMP enabled: using float16 for forward pass")
+        logger.info("AMP enabled: using float16 for forward pass")
 
     # ---- Training loop ----
     best_val_psnr = 0.0
@@ -163,7 +171,7 @@ def train_model(
     use_drive = drive_dir is not None and os.path.isdir(drive_dir)
     if use_drive:
         os.makedirs(drive_dir, exist_ok=True)
-        print(f"  Drive mounted: checkpoints will be mirrored to {drive_dir}")
+        logger.info(f"Drive mounted: checkpoints will be mirrored to {drive_dir}")
 
     drive_log_path = os.path.join(drive_dir, 'training_log.csv') if use_drive else None
 
@@ -192,7 +200,7 @@ def train_model(
                 loss, _ = criterion(output, img, mask)
 
             if not torch.isfinite(loss):
-                print(f"\nWarning: non-finite loss ({loss.item()}) at epoch {epoch} — skipping batch")
+                logger.warning(f"Non-finite loss ({loss.item()}) at epoch {epoch} — skipping batch")
                 optimizer.zero_grad()
                 continue
 
@@ -259,7 +267,7 @@ def train_model(
 
         scheduler.step()
 
-        print(f"Epoch {epoch:03d} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | val_psnr={val_psnr:.2f} dB | val_ssim={val_ssim:.4f} | val_wasserstein={val_wasserstein:.2f} | val_rmse={val_rmse:.2f} | val_kl={val_kl_divergence:.3f}")
+        logger.info(f"Epoch {epoch:03d} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | val_psnr={val_psnr:.2f} dB | val_ssim={val_ssim:.4f} | val_wasserstein={val_wasserstein:.2f} | val_rmse={val_rmse:.2f} | val_kl={val_kl_divergence:.3f}")
 
         # Store current epoch metrics
         current_metrics = {
@@ -282,7 +290,7 @@ def train_model(
             try:
                 epoch_callback(epoch, current_metrics)
             except Exception as e:
-                print(f"Warning: epoch_callback failed: {e}")
+                logger.warning(f"epoch_callback failed: {e}")
 
         loss_change = 0.0 if prev_train_loss is None else prev_train_loss - train_loss
         psnr_realistic = "realistic" if 30 <= val_psnr <= 45 else ("too_high" if val_psnr > 45 else "too_low")
@@ -327,8 +335,8 @@ def train_model(
                 if use_drive:
                     rotate_checkpoints(drive_dir, keep_checkpoints)
 
-    print(f"\nTraining complete. Best val PSNR: {best_val_psnr:.2f} dB")
-    print(f"Checkpoints in: {output_dir}/")
+    logger.info(f"Training complete. Best val PSNR: {best_val_psnr:.2f} dB")
+    logger.info(f"Checkpoints in: {output_dir}/")
 
     return {
         'best_val_psnr': best_val_psnr,

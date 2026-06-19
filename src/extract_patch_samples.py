@@ -4,9 +4,11 @@ Extract 64x64 patches for proper visualization of patch training results.
 This shows what the model actually sees during training and inference.
 """
 
-import argparse, os, cv2, glob
+import argparse, logging, os, cv2, glob
 import numpy as np
 from scipy.ndimage import binary_dilation
+
+logger = logging.getLogger(__name__)
 
 def add_vessel_padding(mask, padding_radius=3):
     """Add padding around vessel regions to include surrounding context"""
@@ -86,7 +88,7 @@ def extract_vessel_patches(img_dir, mask_dir, output_img_dir, output_mask_dir, p
             cv2.imwrite(os.path.join(output_img_dir, filename), img_patch)
             cv2.imwrite(os.path.join(output_mask_dir, filename), padded_mask_patch)
             extracted_count += 1
-            print(f"  {filename}: vessel ratio {ratio:.3f} at position ({x},{y}) + 3px padding")
+            logger.debug(f"{filename}: vessel ratio {ratio:.3f} at position ({x},{y}) + 3px padding")
             
         else:
             # Fallback: extract center patch even if no vessels (for completeness)
@@ -103,12 +105,9 @@ def extract_vessel_patches(img_dir, mask_dir, output_img_dir, output_mask_dir, p
             cv2.imwrite(os.path.join(output_img_dir, filename), img_patch)
             cv2.imwrite(os.path.join(output_mask_dir, filename), padded_mask_patch)
             extracted_count += 1
-            print(f"  {filename}: no vessels found, using center patch + padding")
-    
-    print(f"✓ Extracted {extracted_count} vessel-focused patches ({patch_size}×{patch_size})")
-    print(f"  Input patches: {output_img_dir}")
-    print(f"  Mask patches:  {output_mask_dir}")
-    print(f"  Min vessel ratio: {min_vessel_ratio:.2f}")
+            logger.debug(f"{filename}: no vessels found, using center patch + padding")
+
+    logger.info(f"Extracted {extracted_count} vessel-focused patches ({patch_size}×{patch_size}) → {output_img_dir} | min_vessel_ratio={min_vessel_ratio:.2f}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract 64x64 patches for visualization")

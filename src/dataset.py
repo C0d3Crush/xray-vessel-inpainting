@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-import os, json, random
+import os, json, logging, random
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -103,8 +105,7 @@ class ArcadeDataset(Dataset):
         ]
         filtered_count = len(filtered_ids)
         if filtered_count < original_count:
-            print(f"⚠️  Filtered dataset: {original_count} → {filtered_count} images")
-            print(f"   Skipped {original_count - filtered_count} images without precomputed files")
+            logger.warning(f"Filtered dataset: {original_count} → {filtered_count} images (skipped {original_count - filtered_count} without precomputed files)")
         return filtered_ids
 
     def _build_path_cache(self, directory: str) -> dict:

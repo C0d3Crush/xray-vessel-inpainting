@@ -1,7 +1,10 @@
 import json
+import logging
 import torch
 import numpy as np
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 try:
     from scipy.stats import wasserstein_distance
@@ -42,7 +45,7 @@ def _load(checkpoint_path, device):
     return checkpoint
 
 def load_checkpoint(path, model, device, optimizer=None, reset_optimizer=True, is_dis=False):
-    print("Load checkpoint from: {}".format(path))
+    logger.info("Load checkpoint from: {}".format(path))
     checkpoint = _load(path, device)
     if is_dis:
         s = checkpoint["disc"]
@@ -55,7 +58,7 @@ def load_checkpoint(path, model, device, optimizer=None, reset_optimizer=True, i
     if not reset_optimizer:
         optimizer_state = checkpoint["optimizer"]
         if optimizer_state is not None:
-            print("Load optimizer state from {}".format(path))
+            logger.info("Load optimizer state from {}".format(path))
             optimizer.load_state_dict(checkpoint["optimizer"])
     return model
 
@@ -92,7 +95,7 @@ def rotate_checkpoints(output_dir, keep_checkpoints):
         for old_ckpt in checkpoints[keep_checkpoints:]:
             try:
                 os.remove(old_ckpt)
-                print(f"  Rotated out: {os.path.basename(old_ckpt)}")
+                logger.debug(f"Rotated out: {os.path.basename(old_ckpt)}")
             except OSError:
                 pass
 

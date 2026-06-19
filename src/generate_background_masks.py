@@ -6,8 +6,10 @@ Creates random geometric shapes (circles, rectangles, irregular blobs) in vessel
 to teach the model to generate realistic background tissue, not just copy existing patterns.
 """
 
-import argparse, os, cv2, glob
+import argparse, logging, os, cv2, glob
 import numpy as np
+
+logger = logging.getLogger(__name__)
 from scipy.ndimage import binary_dilation, binary_erosion
 import random
 
@@ -177,12 +179,10 @@ def process_training_masks(input_img_dir, input_mask_dir, output_img_dir, output
                 cv2.imwrite(output_mask_file, bg_mask)
                 total_generated += 1
                 
-                print(f"  {base_name}{var_suffix}: {num_shapes} background shapes generated")
-    
-    print(f"\n✓ Generated {total_generated} background training samples")
-    print(f"  Images: {output_img_dir}")
-    print(f"  Masks: {output_mask_dir}")
-    print(f"  Safety margin: {safety_margin}px around vessels")
+                logger.debug(f"{base_name}{var_suffix}: {num_shapes} background shapes generated")
+
+    logger.info(f"Generated {total_generated} background training samples")
+    logger.info(f"Images: {output_img_dir} | Masks: {output_mask_dir} | Safety margin: {safety_margin}px")
 
 def main():
     parser = argparse.ArgumentParser(description="Generate background training masks")
@@ -200,11 +200,8 @@ def main():
     random.seed(args.seed)
     np.random.seed(args.seed)
     
-    print(f"Generating background training masks:")
-    print(f"  Input: {args.input_img}")
-    print(f"  Vessel masks: {args.input_mask}")
-    print(f"  Variations per image: {args.variations}")
-    print(f"  Safety margin: {args.safety_margin}px")
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
+    logger.info(f"Generating background training masks: input={args.input_img}, masks={args.input_mask}, variations={args.variations}, margin={args.safety_margin}px")
     
     process_training_masks(
         args.input_img, args.input_mask,
