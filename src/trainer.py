@@ -160,7 +160,7 @@ def train_model(
 
     # ---- AMP setup ----
     use_amp = amp and device.type == 'cuda'
-    scaler  = torch.cuda.amp.GradScaler(enabled=use_amp)
+    scaler  = torch.amp.GradScaler('cuda', enabled=use_amp)
     if use_amp:
         logger.info("AMP enabled: using float16 for forward pass")
 
@@ -176,9 +176,10 @@ def train_model(
     drive_log_path = os.path.join(drive_dir, 'training_log.csv') if use_drive else None
 
     csv_header = 'epoch,train_loss,val_loss,val_l1_loss,val_ssim_loss,val_psnr,val_ssim,val_wasserstein,val_rmse,val_kl_divergence,loss_change,psnr_realistic,learning_pattern\n'
-    with open(log_path, 'w') as f:
-        f.write(csv_header)
-    if drive_log_path:
+    if not os.path.exists(log_path):
+        with open(log_path, 'w') as f:
+            f.write(csv_header)
+    if drive_log_path and not os.path.exists(drive_log_path):
         with open(drive_log_path, 'w') as f:
             f.write(csv_header)
 
@@ -195,7 +196,7 @@ def train_model(
         for img, mask in prog:
             img, mask = img.to(device), mask.to(device)
             optimizer.zero_grad()
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            with torch.amp.autocast('cuda', enabled=use_amp):
                 output = model(img, mask)
                 loss, _ = criterion(output, img, mask)
 
@@ -229,7 +230,7 @@ def train_model(
         with torch.no_grad():
             for img, mask in tqdm(val_loader, desc=f"Epoch {epoch}/{epochs} [val]"):
                 img, mask = img.to(device), mask.to(device)
-                with torch.cuda.amp.autocast(enabled=use_amp):
+                with torch.amp.autocast('cuda', enabled=use_amp):
                     output = model(img, mask)
 
                 # Calculate validation loss
@@ -323,15 +324,8 @@ def train_model(
         if epoch % save_every == 0:
             epoch_path = os.path.join(output_dir, f'epoch_{epoch:03d}.pth')
             save_checkpoint(model, optimizer, epoch, epoch_path, metrics={'train_loss': train_loss})
-            if use_drive:
-                drive_epoch = os.path.join(drive_dir, f'epoch_{epoch:03d}.pth')
-                save_checkpoint(model, optimizer, epoch, drive_epoch, metrics={'train_loss': train_loss})
-
-            # Rotate old checkpoints
             if keep_checkpoints > 0:
                 rotate_checkpoints(output_dir, keep_checkpoints)
-                if use_drive:
-                    rotate_checkpoints(drive_dir, keep_checkpoints)
 
     logger.info(f"Training complete. Best val PSNR: {best_val_psnr:.2f} dB")
     logger.info(f"Checkpoints in: {output_dir}/")
