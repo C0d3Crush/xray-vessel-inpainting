@@ -2,6 +2,8 @@
 import warnings
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import torchvision
 
 try:
     from skimage.metrics import structural_similarity as ssim_fn
@@ -19,20 +21,68 @@ def _build_ssim_window(window_size: int, dtype, device):
     return window
 
 
+class PerceptualLoss(nn.Module):
+    """VGG16 feature matching loss for texture supervision (grayscale → RGB adapter included)."""
+
+    _VGG_LAYERS = {'relu1_2': 4, 'relu2_2': 9, 'relu3_3': 16}
+    _MEAN = [0.485, 0.456, 0.406]
+    _STD  = [0.229, 0.224, 0.225]
+
+    def __init__(self, layer_weights=None):
+        super().__init__()
+        self.layer_weights = layer_weights or {'relu1_2': 1.0, 'relu2_2': 1.0, 'relu3_3': 1.0}
+
+        vgg_features = torchvision.models.vgg16(weights=torchvision.models.VGG16_Weights.DEFAULT).features
+        self.slices = nn.ModuleDict()
+        prev = 0
+        for name, idx in sorted(self._VGG_LAYERS.items(), key=lambda x: x[1]):
+            if name in self.layer_weights:
+                self.slices[name] = nn.Sequential(*list(vgg_features.children())[prev:idx + 1])
+                prev = idx + 1
+
+        for param in self.parameters():
+            param.requires_grad = False
+
+        mean = torch.tensor(self._MEAN).view(1, 3, 1, 1)
+        std  = torch.tensor(self._STD).view(1, 3, 1, 1)
+        self.register_buffer('mean', mean)
+        self.register_buffer('std', std)
+
+    def _preprocess(self, x):
+        """(B,1,H,W) in [-1,1] → (B,3,H,W) ImageNet-normalised."""
+        x = (x + 1.0) / 2.0
+        x = x.repeat(1, 3, 1, 1)
+        return (x - self.mean) / self.std
+
+    def forward(self, output, target):
+        out_f = self._preprocess(output)
+        tgt_f = self._preprocess(target)
+        loss = torch.tensor(0.0, device=output.device)
+        for name, slice_net in self.slices.items():
+            out_f = slice_net(out_f)
+            tgt_f = slice_net(tgt_f)
+            loss = loss + self.layer_weights[name] * F.l1_loss(out_f, tgt_f.detach())
+        return loss
+
+
 class InpaintingLoss(nn.Module):
     """L1 + SSIM loss on masked region + L1 background consistency."""
     # SSIM stability constants from the original SSIM paper
     _C1 = 0.01 ** 2
     _C2 = 0.03 ** 2
 
-    def __init__(self, ssim_weight=0.5, mask_weight=6.0, valid_weight=1.0, ssim_window_size=11):
+    def __init__(self, ssim_weight=0.5, mask_weight=6.0, valid_weight=1.0,
+                 perceptual_weight=0.0, ssim_window_size=11):
         super().__init__()
         self.l1 = nn.L1Loss()
         self.ssim_weight = ssim_weight
         self.mask_weight = mask_weight
         self.valid_weight = valid_weight
+        self.perceptual_weight = perceptual_weight
         self.ssim_window_size = ssim_window_size
         self._ssim_window = None  # built lazily on first forward pass (device unknown at init)
+        if perceptual_weight > 0:
+            self.perceptual = PerceptualLoss()
 
     def _ssim_loss(self, pred, target):
         if self._ssim_window is None or self._ssim_window.device != pred.device:
@@ -57,10 +107,16 @@ class InpaintingLoss(nn.Module):
 
         total_loss = loss_mask * self.mask_weight + loss_valid * self.valid_weight + self.ssim_weight * loss_ssim
 
-        # Return total loss and components for analysis
-        return total_loss, {
+        components = {
             'l1_loss': (loss_mask * self.mask_weight + loss_valid * self.valid_weight).item(),
             'ssim_loss': (self.ssim_weight * loss_ssim).item(),
             'mask_loss': loss_mask.item(),
-            'valid_loss': loss_valid.item()
+            'valid_loss': loss_valid.item(),
         }
+
+        if self.perceptual_weight > 0:
+            loss_perceptual = self.perceptual(output, target)
+            total_loss = total_loss + self.perceptual_weight * loss_perceptual
+            components['perceptual_loss'] = loss_perceptual.item()
+
+        return total_loss, components

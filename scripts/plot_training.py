@@ -26,28 +26,41 @@ def plot_training_log(csv_path, output_path=None):
         # Create figure with 5 subplots (2 rows)
         fig, axes = plt.subplots(2, 3, figsize=(18, 8))
         axes = axes.flatten()  # Make indexing easier
-        
-        # Plot 1: Training Loss
-        axes[0].plot(df['epoch'], df['train_loss'], 'b-', linewidth=2)
+
+        # Plot 1: Training + Validation Loss combined
+        axes[0].plot(df['epoch'], df['train_loss'], 'b-', linewidth=2, label='Train Loss')
+        if 'val_loss' in df.columns:
+            axes[0].plot(df['epoch'], df['val_loss'], 'r-', linewidth=2, label='Val Loss')
+            axes[0].legend(fontsize=9)
         axes[0].set_xlabel('Epoch', fontsize=12)
-        axes[0].set_ylabel('Training Loss', fontsize=12)
-        axes[0].set_title('Training Loss', fontsize=14, fontweight='bold')
+        axes[0].set_ylabel('Loss', fontsize=12)
+        axes[0].set_title('Training & Validation Loss', fontsize=14, fontweight='bold')
         axes[0].grid(True, alpha=0.3)
 
-        # Plot 2: Validation PSNR
-        axes[1].plot(df['epoch'], df['val_psnr'], 'g-', linewidth=2)
+        # Plot 2: Validation PSNR (full image + hole-only) with medical grade thresholds
+        axes[1].plot(df['epoch'], df['val_psnr'], 'g-', linewidth=2, label='Full image')
+        if 'val_hole_psnr' in df.columns:
+            axes[1].plot(df['epoch'], df['val_hole_psnr'], 'g--', linewidth=2, label='Hole only')
+        axes[1].axhline(35.0, color='orange', linestyle='--', alpha=0.7, label='Good ≥35 dB')
+        axes[1].axhline(40.0, color='red',    linestyle='--', alpha=0.7, label='Excellent ≥40 dB')
         axes[1].set_xlabel('Epoch', fontsize=12)
         axes[1].set_ylabel('PSNR (dB)', fontsize=12)
         axes[1].set_title('Validation PSNR', fontsize=14, fontweight='bold')
+        axes[1].legend(fontsize=9)
         axes[1].grid(True, alpha=0.3)
 
-        # Plot 3: Validation SSIM
-        axes[2].plot(df['epoch'], df['val_ssim'], 'r-', linewidth=2)
+        # Plot 3: Validation SSIM (full image + hole-only) with medical grade thresholds
+        axes[2].plot(df['epoch'], df['val_ssim'], 'r-', linewidth=2, label='Full image')
+        if 'val_hole_ssim' in df.columns:
+            axes[2].plot(df['epoch'], df['val_hole_ssim'], 'r--', linewidth=2, label='Hole only')
+        axes[2].axhline(0.92, color='orange', linestyle='--', alpha=0.7, label='Good ≥0.92')
+        axes[2].axhline(0.95, color='red',    linestyle='--', alpha=0.7, label='Excellent ≥0.95')
         axes[2].set_xlabel('Epoch', fontsize=12)
         axes[2].set_ylabel('SSIM', fontsize=12)
         axes[2].set_title('Validation SSIM', fontsize=14, fontweight='bold')
+        axes[2].legend(fontsize=9)
         axes[2].grid(True, alpha=0.3)
-        
+
         # Plot 4: Wasserstein Distance
         axes[3].plot(df['epoch'], df['val_wasserstein'], 'm-', linewidth=2)
         axes[3].set_xlabel('Epoch', fontsize=12)
@@ -69,11 +82,14 @@ def plot_training_log(csv_path, output_path=None):
         # Create figure with 3 subplots (legacy format)
         fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
-        # Plot 1: Training Loss
-        axes[0].plot(df['epoch'], df['train_loss'], 'b-', linewidth=2)
+        # Plot 1: Training + Validation Loss combined
+        axes[0].plot(df['epoch'], df['train_loss'], 'b-', linewidth=2, label='Train Loss')
+        if 'val_loss' in df.columns:
+            axes[0].plot(df['epoch'], df['val_loss'], 'r-', linewidth=2, label='Val Loss')
+            axes[0].legend(fontsize=9)
         axes[0].set_xlabel('Epoch', fontsize=12)
-        axes[0].set_ylabel('Training Loss', fontsize=12)
-        axes[0].set_title('Training Loss', fontsize=14, fontweight='bold')
+        axes[0].set_ylabel('Loss', fontsize=12)
+        axes[0].set_title('Training & Validation Loss', fontsize=14, fontweight='bold')
         axes[0].grid(True, alpha=0.3)
 
         # Plot 2: Validation PSNR

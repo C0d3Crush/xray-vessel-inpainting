@@ -1,1 +1,1 @@
-epoch,train_loss,val_loss,val_l1_loss,val_ssim_loss,val_psnr,val_ssim,val_wasserstein,val_rmse,val_kl_divergence
+epoch,train_loss,val_loss,val_l1_loss,val_ssim_loss,val_psnr,val_ssim,val_hole_psnr,val_hole_ssim,val_wasserstein,val_rmse,val_kl_divergence,loss_change,psnr_realistic,learning_pattern

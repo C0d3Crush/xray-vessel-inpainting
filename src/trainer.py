@@ -58,6 +58,7 @@ def train_model(
     ssim_weight=0.5,
     mask_weight=6.0,
     valid_weight=1.0,
+    perceptual_weight=0.1,
 
     # Other parameters
     seed=42,
@@ -156,7 +157,8 @@ def train_model(
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     criterion = InpaintingLoss(ssim_weight=ssim_weight,
                                 mask_weight=mask_weight,
-                                valid_weight=valid_weight).to(device)
+                                valid_weight=valid_weight,
+                                perceptual_weight=perceptual_weight).to(device)
 
     # ---- AMP setup ----
     use_amp = amp and device.type == 'cuda'
@@ -175,7 +177,7 @@ def train_model(
 
     drive_log_path = os.path.join(drive_dir, 'training_log.csv') if use_drive else None
 
-    csv_header = 'epoch,train_loss,val_loss,val_l1_loss,val_ssim_loss,val_psnr,val_ssim,val_wasserstein,val_rmse,val_kl_divergence,loss_change,psnr_realistic,learning_pattern\n'
+    csv_header = 'epoch,train_loss,val_loss,val_l1_loss,val_ssim_loss,val_psnr,val_ssim,val_hole_psnr,val_hole_ssim,val_wasserstein,val_rmse,val_kl_divergence,loss_change,psnr_realistic,learning_pattern\n'
     if not os.path.exists(log_path):
         with open(log_path, 'w') as f:
             f.write(csv_header)
@@ -223,6 +225,9 @@ def train_model(
         val_ssim_loss = 0.0
         val_psnr = 0.0
         val_ssim = 0.0
+        val_hole_psnr = 0.0
+        val_hole_ssim = 0.0
+        val_hole_samples = 0
         val_wasserstein = 0.0
         val_rmse = 0.0
         val_kl_divergence = 0.0
@@ -250,6 +255,24 @@ def train_model(
                 val_rmse += np.sqrt(mse_per).sum()
 
                 val_ssim += sum(ssim_fn(o, g, data_range=255.0, channel_axis=None) for o, g in zip(out_np, gt_np))
+
+                # Hole-only metrics: restrict to masked (inpainted) region only.
+                # Full-image metrics are inflated because unmasked pixels are
+                # copied verbatim from the input and always match ground truth.
+                mask_np = mask[:, 0].cpu().numpy() > 0.5  # (B, H, W) bool
+                for o, g, m in zip(out_np, gt_np, mask_np):
+                    if not m.any():
+                        continue
+                    mse_hole = ((o[m] - g[m]) ** 2).mean()
+                    val_hole_psnr += 100.0 if mse_hole == 0 else \
+                        20 * np.log10(255.0 / np.sqrt(max(mse_hole, 1e-10)))
+                    try:
+                        _, ssim_map = ssim_fn(o, g, data_range=255.0, channel_axis=None, full=True)
+                        val_hole_ssim += float(ssim_map[m].mean())
+                    except TypeError:
+                        # skimage unavailable — placeholder ssim_fn has no `full` kwarg
+                        val_hole_ssim += float(ssim_fn(o, g, data_range=255.0, channel_axis=None))
+                    val_hole_samples += 1
                 val_wasserstein += wasserstein_distance_2d_batch(out_np, gt_np).sum()
                 val_kl_divergence += calculate_kl_divergence_batch(out_np, gt_np).sum()
                 val_num_samples += len(out_np)
@@ -263,10 +286,13 @@ def train_model(
             val_wasserstein /= val_num_samples
             val_rmse /= val_num_samples
             val_kl_divergence /= val_num_samples
+        if val_hole_samples > 0:
+            val_hole_psnr /= val_hole_samples
+            val_hole_ssim /= val_hole_samples
 
         scheduler.step()
 
-        logger.info(f"Epoch {epoch:03d} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | val_psnr={val_psnr:.2f} dB | val_ssim={val_ssim:.4f} | val_wasserstein={val_wasserstein:.2f} | val_rmse={val_rmse:.2f} | val_kl={val_kl_divergence:.3f}")
+        logger.info(f"Epoch {epoch:03d} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | val_psnr={val_psnr:.2f} dB | val_ssim={val_ssim:.4f} | hole_psnr={val_hole_psnr:.2f} dB | hole_ssim={val_hole_ssim:.4f} | val_wasserstein={val_wasserstein:.2f} | val_rmse={val_rmse:.2f} | val_kl={val_kl_divergence:.3f}")
 
         # Store current epoch metrics
         current_metrics = {
@@ -277,6 +303,8 @@ def train_model(
             'val_ssim_loss': val_ssim_loss,
             'val_psnr': val_psnr,
             'val_ssim': val_ssim,
+            'val_hole_psnr': val_hole_psnr,
+            'val_hole_ssim': val_hole_ssim,
             'val_wasserstein': val_wasserstein,
             'val_rmse': val_rmse,
             'val_kl_divergence': val_kl_divergence
@@ -303,7 +331,8 @@ def train_model(
             learning_pattern = "normal"
 
         csv_row = (f"{epoch},{train_loss:.4f},{val_loss:.4f},{val_l1_loss:.4f},{val_ssim_loss:.4f},"
-                   f"{val_psnr:.2f},{val_ssim:.4f},{val_wasserstein:.4f},{val_rmse:.4f},"
+                   f"{val_psnr:.2f},{val_ssim:.4f},{val_hole_psnr:.2f},{val_hole_ssim:.4f},"
+                   f"{val_wasserstein:.4f},{val_rmse:.4f},"
                    f"{val_kl_divergence:.4f},{loss_change:.4f},{psnr_realistic},{learning_pattern}\n")
         with open(log_path, 'a') as f:
             f.write(csv_row)
@@ -313,8 +342,11 @@ def train_model(
 
         prev_train_loss = train_loss
 
-        if val_psnr > best_val_psnr:
-            best_val_psnr = val_psnr
+        # Select best checkpoint on hole PSNR (full-image PSNR is dominated by
+        # pixels copied verbatim from the input); fall back if no masks in val set
+        selection_psnr = val_hole_psnr if val_hole_samples > 0 else val_psnr
+        if selection_psnr > best_val_psnr:
+            best_val_psnr = selection_psnr
             best_path = os.path.join(output_dir, 'best.pth')
             save_checkpoint(model, optimizer, epoch, best_path, metrics={'train_loss': train_loss})
             if use_drive:
@@ -327,7 +359,7 @@ def train_model(
             if keep_checkpoints > 0:
                 rotate_checkpoints(output_dir, keep_checkpoints)
 
-    logger.info(f"Training complete. Best val PSNR: {best_val_psnr:.2f} dB")
+    logger.info(f"Training complete. Best val hole PSNR: {best_val_psnr:.2f} dB")
     logger.info(f"Checkpoints in: {output_dir}/")
 
     return {
