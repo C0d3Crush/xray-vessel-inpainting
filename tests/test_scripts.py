@@ -8,6 +8,7 @@ import matplotlib
 matplotlib.use('Agg')  # non-interactive backend for CI
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts', 'legacy'))
 
 
 # ---------------------------------------------------------------------------
