@@ -28,6 +28,16 @@ def set_seed(seed: int):
         torch.backends.cudnn.benchmark = False
 
 
+def _val_worker_init(worker_id):
+    """Fixed per-worker seed so on-the-fly val masks/patches are identical
+    every epoch — otherwise val metrics contain mask-lottery noise and epochs
+    are not comparable."""
+    seed = 10000 + worker_id
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
 def _seeded_eval_loss(model, loader, criterion, device, use_amp, seed):
     """Loss on a fixed train subset in eval mode with fixed RNG.
 
@@ -172,7 +182,8 @@ def train_model(
                               shuffle=True,  num_workers=num_workers,
                               pin_memory=(device.type == 'cuda'))
     val_loader   = DataLoader(val_dataset,   batch_size=batch_size,
-                              shuffle=False, num_workers=num_workers)
+                              shuffle=False, num_workers=num_workers,
+                              worker_init_fn=_val_worker_init)
 
     # Fixed train subset for fair train-vs-val comparison (see _seeded_eval_loss).
     # num_workers=0 so the seeded main-process RNG governs patch/mask sampling.
@@ -314,6 +325,13 @@ def train_model(
         val_rmse = 0.0
         val_kl_divergence = 0.0
         val_num_samples = 0
+        # num_workers=0: val masks are generated in the main process, so seed it
+        # here (workers are covered by _val_worker_init)
+        if num_workers == 0:
+            _rng_states = (random.getstate(), np.random.get_state(), torch.get_rng_state())
+            random.seed(10000)
+            np.random.seed(10000)
+            torch.manual_seed(10000)
         with torch.no_grad():
             for img, mask in tqdm(val_loader, desc=f"Epoch {epoch}/{epochs} [val]"):
                 img, mask = img.to(device), mask.to(device)
@@ -358,6 +376,11 @@ def train_model(
                 val_wasserstein += wasserstein_distance_2d_batch(out_np, gt_np).sum()
                 val_kl_divergence += calculate_kl_divergence_batch(out_np, gt_np).sum()
                 val_num_samples += len(out_np)
+
+        if num_workers == 0:
+            random.setstate(_rng_states[0])
+            np.random.set_state(_rng_states[1])
+            torch.set_rng_state(_rng_states[2])
 
         val_loss /= len(val_loader)
         val_l1_loss /= len(val_loader)
