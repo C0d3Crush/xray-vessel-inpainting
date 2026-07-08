@@ -18,7 +18,6 @@ help:
 	@echo "  make install         - Install dependencies"
 	@echo "  make smoke-test      - Quick pipeline verification (CPU, 1 epoch)"
 	@echo "  make smoke-test-background - Train with random background masks (2 epochs)"
-	@echo "  make cache-data      - Precompute masks & annotations (legacy, unused)"
 # Legacy prepare-samples removed
 	@echo "  make prepare-patch-samples - Create 64×64 patches for proper visualization"
 	@echo "  make patch-comparison - Complete 64×64 patch workflow (prepare + inference + visualize)"
@@ -63,16 +62,6 @@ smoke-test-background:
 		--train_mask data/smoke_bg_mask \
 		--val_img $(VAL_IMG) --val_ann $(VAL_ANN) \
 		--output_dir checkpoints_bg
-
-cache-data:
-	@echo "Caching train masks..."
-	python scripts/legacy/cache_masks.py --annotations $(TRAIN_ANN) --images $(TRAIN_IMG) --output $(DATA_DIR)/masks_cache/train
-	@echo "Caching val masks..."
-	python scripts/legacy/cache_masks.py --annotations $(VAL_ANN) --images $(VAL_IMG) --output $(DATA_DIR)/masks_cache/val
-	@echo "Preprocessing annotations..."
-	python scripts/legacy/preprocess_coco.py --annotations $(TRAIN_ANN) --output $(TRAIN_ANN:.json=.pkl)
-	python scripts/legacy/preprocess_coco.py --annotations $(VAL_ANN) --output $(VAL_ANN:.json=.pkl)
-	@echo "✓ Data caching complete. Training will be faster now."
 
 # Legacy prepare-samples removed - use prepare-patch-samples or prepare-background-samples
 

@@ -99,7 +99,6 @@ def train_model(
     # Loss parameters
     ssim_weight=0.5,
     mask_weight=6.0,
-    valid_weight=1.0,
     perceptual_weight=0.1,
     adv_weight=0.0,
     gan_start_epoch=1,
@@ -209,7 +208,6 @@ def train_model(
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     criterion = InpaintingLoss(ssim_weight=ssim_weight,
                                 mask_weight=mask_weight,
-                                valid_weight=valid_weight,
                                 perceptual_weight=perceptual_weight).to(device)
 
     # ---- GAN setup (optional) ----

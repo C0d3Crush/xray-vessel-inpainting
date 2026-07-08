@@ -28,7 +28,6 @@ def main():
     parser.add_argument('--mask_padding',     type=int,   default=10,                         help='Dilation radius in pixels applied to vessel masks')
     parser.add_argument('--ssim_weight',      type=float, default=0.5,                        help='Weight of SSIM loss component')
     parser.add_argument('--mask_weight',      type=float, default=6.0,                        help='L1 loss weight on masked (vessel) regions')
-    parser.add_argument('--valid_weight',     type=float, default=1.0,                        help='L1 loss weight on valid (background) regions')
     parser.add_argument('--perceptual_weight',type=float, default=0.1,                        help='Weight for VGG16 perceptual loss (0 = disabled)')
     parser.add_argument('--adv_weight',       type=float, default=0.0,                        help='Weight for adversarial hinge loss with PatchGAN discriminator (0 = disabled)')
     parser.add_argument('--gan_start_epoch',  type=int,   default=1,                          help='Epoch from which the adversarial loss becomes active (warm-up)')
@@ -52,7 +51,7 @@ def main():
         smoke_test=args.smoke_test, smoke_size=args.smoke_size,
         input_size=args.input_size, random_masks=args.random_masks,
         mask_padding=args.mask_padding, ssim_weight=args.ssim_weight,
-        mask_weight=args.mask_weight, valid_weight=args.valid_weight,
+        mask_weight=args.mask_weight,
         perceptual_weight=args.perceptual_weight,
         adv_weight=args.adv_weight, gan_start_epoch=args.gan_start_epoch,
         patches_per_image=args.patches_per_image, foreground_prob=args.foreground_prob,

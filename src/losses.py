@@ -76,18 +76,21 @@ def generator_hinge_loss(fake_logits):
 
 
 class InpaintingLoss(nn.Module):
-    """L1 + SSIM loss on masked region + L1 background consistency."""
+    """L1 + SSIM loss on masked region.
+
+    No valid-region term: the network composites gen = gen*mask + img*(1-mask),
+    so unmasked pixels always equal the target and such a loss would be zero.
+    """
     # SSIM stability constants from the original SSIM paper
     _C1 = 0.01 ** 2
     _C2 = 0.03 ** 2
 
-    def __init__(self, ssim_weight=0.5, mask_weight=6.0, valid_weight=1.0,
+    def __init__(self, ssim_weight=0.5, mask_weight=6.0,
                  perceptual_weight=0.0, ssim_window_size=11):
         super().__init__()
         self.l1 = nn.L1Loss()
         self.ssim_weight = ssim_weight
         self.mask_weight = mask_weight
-        self.valid_weight = valid_weight
         self.perceptual_weight = perceptual_weight
         self.ssim_window_size = ssim_window_size
         self._ssim_window = None  # built lazily on first forward pass (device unknown at init)
@@ -111,17 +114,15 @@ class InpaintingLoss(nn.Module):
         return 1 - ssim_map.mean()
 
     def forward(self, output, target, mask):
-        loss_mask  = self.l1(output * mask,       target * mask)
-        loss_valid = self.l1(output * (1 - mask), target * (1 - mask))
+        loss_mask  = self.l1(output * mask, target * mask)
         loss_ssim  = self._ssim_loss(output, target)
 
-        total_loss = loss_mask * self.mask_weight + loss_valid * self.valid_weight + self.ssim_weight * loss_ssim
+        total_loss = loss_mask * self.mask_weight + self.ssim_weight * loss_ssim
 
         components = {
-            'l1_loss': (loss_mask * self.mask_weight + loss_valid * self.valid_weight).item(),
+            'l1_loss': (loss_mask * self.mask_weight).item(),
             'ssim_loss': (self.ssim_weight * loss_ssim).item(),
             'mask_loss': loss_mask.item(),
-            'valid_loss': loss_valid.item(),
         }
 
         if self.perceptual_weight > 0:
