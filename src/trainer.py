@@ -12,9 +12,10 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 from network.network_pro import Inpaint
+from network.discriminator import PatchDiscriminator
 from utils import load_checkpoint, save_checkpoint, rotate_checkpoints, wasserstein_distance_2d_batch, calculate_kl_divergence_batch
 from dataset import ArcadeDataset, DatasetConfig
-from losses import InpaintingLoss, ssim_fn
+from losses import InpaintingLoss, ssim_fn, discriminator_hinge_loss, generator_hinge_loss
 
 
 def set_seed(seed: int):
@@ -59,6 +60,8 @@ def train_model(
     mask_weight=6.0,
     valid_weight=1.0,
     perceptual_weight=0.1,
+    adv_weight=0.0,
+    gan_start_epoch=1,
 
     # Other parameters
     seed=42,
@@ -160,9 +163,24 @@ def train_model(
                                 valid_weight=valid_weight,
                                 perceptual_weight=perceptual_weight).to(device)
 
+    # ---- GAN setup (optional) ----
+    use_gan = adv_weight > 0
+    discriminator = None
+    d_optimizer = None
+    if use_gan:
+        discriminator = PatchDiscriminator().to(device)
+        d_optimizer = optim.Adam(discriminator.parameters(), lr=lr, betas=(0.5, 0.999))
+        if ckpt and os.path.exists(ckpt):
+            disc_ckpt = os.path.join(os.path.dirname(ckpt), 'discriminator.pth')
+            if os.path.exists(disc_ckpt):
+                discriminator.load_state_dict(torch.load(disc_ckpt, map_location=device))
+                logger.info(f"Resumed discriminator from: {disc_ckpt}")
+        logger.info(f"GAN enabled: adv_weight={adv_weight}, active from epoch {gan_start_epoch}")
+
     # ---- AMP setup ----
     use_amp = amp and device.type == 'cuda'
     scaler  = torch.amp.GradScaler('cuda', enabled=use_amp)
+    d_scaler = torch.amp.GradScaler('cuda', enabled=use_amp) if use_gan else None
     if use_amp:
         logger.info("AMP enabled: using float16 for forward pass")
 
@@ -192,7 +210,11 @@ def train_model(
     for epoch in range(1, epochs + 1):
         # -- Train --
         model.train()
+        gan_active = use_gan and epoch >= gan_start_epoch
+        if use_gan and epoch == gan_start_epoch:
+            logger.info(f"GAN loss active from this epoch (adv_weight={adv_weight})")
         train_loss = 0.0
+        train_d_loss = 0.0
         prog = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs} [train]")
 
         for img, mask in prog:
@@ -201,6 +223,22 @@ def train_model(
             with torch.amp.autocast('cuda', enabled=use_amp):
                 output = model(img, mask)
                 loss, _ = criterion(output, img, mask)
+
+            if gan_active:
+                # -- Discriminator step (fake detached: only D gets gradients) --
+                d_optimizer.zero_grad()
+                with torch.amp.autocast('cuda', enabled=use_amp):
+                    d_loss = discriminator_hinge_loss(discriminator(img),
+                                                      discriminator(output.detach()))
+                if torch.isfinite(d_loss):
+                    d_scaler.scale(d_loss).backward()
+                    d_scaler.step(d_optimizer)
+                    d_scaler.update()
+                    train_d_loss += d_loss.item()
+
+                # -- Adversarial term for the generator --
+                with torch.amp.autocast('cuda', enabled=use_amp):
+                    loss = loss + adv_weight * generator_hinge_loss(discriminator(output))
 
             if not torch.isfinite(loss):
                 logger.warning(f"Non-finite loss ({loss.item()}) at epoch {epoch} — skipping batch")
@@ -214,9 +252,13 @@ def train_model(
             scaler.update()
 
             train_loss += loss.item()
-            prog.set_postfix(loss=f"{loss.item():.4f}")
+            if gan_active:
+                prog.set_postfix(loss=f"{loss.item():.4f}", d_loss=f"{d_loss.item():.4f}")
+            else:
+                prog.set_postfix(loss=f"{loss.item():.4f}")
 
         train_loss /= len(train_loader)
+        train_d_loss /= len(train_loader)
 
         # -- Validate --
         model.eval()
@@ -292,7 +334,8 @@ def train_model(
 
         scheduler.step()
 
-        logger.info(f"Epoch {epoch:03d} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | val_psnr={val_psnr:.2f} dB | val_ssim={val_ssim:.4f} | hole_psnr={val_hole_psnr:.2f} dB | hole_ssim={val_hole_ssim:.4f} | val_wasserstein={val_wasserstein:.2f} | val_rmse={val_rmse:.2f} | val_kl={val_kl_divergence:.3f}")
+        gan_info = f" | d_loss={train_d_loss:.4f}" if gan_active else ""
+        logger.info(f"Epoch {epoch:03d} | train_loss={train_loss:.4f}{gan_info} | val_loss={val_loss:.4f} | val_psnr={val_psnr:.2f} dB | val_ssim={val_ssim:.4f} | hole_psnr={val_hole_psnr:.2f} dB | hole_ssim={val_hole_ssim:.4f} | val_wasserstein={val_wasserstein:.2f} | val_rmse={val_rmse:.2f} | val_kl={val_kl_divergence:.3f}")
 
         # Store current epoch metrics
         current_metrics = {
@@ -358,6 +401,12 @@ def train_model(
             save_checkpoint(model, optimizer, epoch, epoch_path, metrics={'train_loss': train_loss})
             if keep_checkpoints > 0:
                 rotate_checkpoints(output_dir, keep_checkpoints)
+
+        if use_gan:
+            # Latest D state only — needed to resume adversarial training
+            torch.save(discriminator.state_dict(), os.path.join(output_dir, 'discriminator.pth'))
+            if use_drive:
+                torch.save(discriminator.state_dict(), os.path.join(drive_dir, 'discriminator.pth'))
 
     logger.info(f"Training complete. Best val hole PSNR: {best_val_psnr:.2f} dB")
     logger.info(f"Checkpoints in: {output_dir}/")

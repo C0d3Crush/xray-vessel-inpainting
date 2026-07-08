@@ -65,6 +65,16 @@ class PerceptualLoss(nn.Module):
         return loss
 
 
+def discriminator_hinge_loss(real_logits, fake_logits):
+    """Hinge loss for the discriminator: push real logits above +1, fake below -1."""
+    return F.relu(1.0 - real_logits).mean() + F.relu(1.0 + fake_logits).mean()
+
+
+def generator_hinge_loss(fake_logits):
+    """Hinge loss for the generator: maximise discriminator output on fakes."""
+    return -fake_logits.mean()
+
+
 class InpaintingLoss(nn.Module):
     """L1 + SSIM loss on masked region + L1 background consistency."""
     # SSIM stability constants from the original SSIM paper

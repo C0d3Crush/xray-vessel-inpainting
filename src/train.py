@@ -30,6 +30,8 @@ def main():
     parser.add_argument('--mask_weight',      type=float, default=6.0,                        help='L1 loss weight on masked (vessel) regions')
     parser.add_argument('--valid_weight',     type=float, default=1.0,                        help='L1 loss weight on valid (background) regions')
     parser.add_argument('--perceptual_weight',type=float, default=0.1,                        help='Weight for VGG16 perceptual loss (0 = disabled)')
+    parser.add_argument('--adv_weight',       type=float, default=0.0,                        help='Weight for adversarial hinge loss with PatchGAN discriminator (0 = disabled)')
+    parser.add_argument('--gan_start_epoch',  type=int,   default=1,                          help='Epoch from which the adversarial loss becomes active (warm-up)')
     parser.add_argument('--patches_per_image',type=int,   default=4,                          help='Number of patches extracted per image per epoch')
     parser.add_argument('--foreground_prob',  type=float, default=0.75,                       help='Probability of sampling patches centered on foreground (vessel/background) regions')
     parser.add_argument('--max_shapes',       type=int,   default=5,                          help='Maximum number of random shapes added to generated masks')
@@ -52,6 +54,7 @@ def main():
         mask_padding=args.mask_padding, ssim_weight=args.ssim_weight,
         mask_weight=args.mask_weight, valid_weight=args.valid_weight,
         perceptual_weight=args.perceptual_weight,
+        adv_weight=args.adv_weight, gan_start_epoch=args.gan_start_epoch,
         patches_per_image=args.patches_per_image, foreground_prob=args.foreground_prob,
         max_shapes=args.max_shapes, vessel_safe_training=args.vessel_safe_training,
         background_training=args.background_training, drive_dir=args.drive_dir,
