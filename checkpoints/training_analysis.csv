@@ -1,1 +1,0 @@
-epoch,train_loss,val_loss,l1_loss,ssim_loss,loss_change,psnr_realistic,learning_pattern
