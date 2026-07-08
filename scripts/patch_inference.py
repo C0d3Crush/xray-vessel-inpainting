@@ -19,6 +19,7 @@ from PIL import Image, ImageDraw
 from pathlib import Path
 
 from coco_utils import load_coco_annotations
+from create_training_comparison import create_training_comparison
 
 # Add src to path
 sys.path.append('src')
@@ -126,7 +127,9 @@ def main():
     parser.add_argument('--device', default='cpu', help='Device to use')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--mask-padding', type=int, default=0, help='Dilation radius in pixels added around vessel annotations')
-    
+    parser.add_argument('--no-comparison', action='store_true', help='Skip the comparison visualization step')
+    parser.add_argument('--title', default='Real 64x64 Patch Inference Results', help='Title for the comparison visualization')
+
     args = parser.parse_args()
     
     # Set seed
@@ -198,10 +201,17 @@ def main():
     
     print(f"✓ Generated {patch_count} patch comparisons")
     print(f"  Original patches: {output_base / 'original'}/")
-    print(f"  Vessel masks: {output_base / 'mask'}/") 
+    print(f"  Vessel masks: {output_base / 'mask'}/")
     print(f"  Inpainted results: {output_base / 'result'}/")
-    print(f"\nCreate comparison:")
-    print(f"  python scripts/create_training_comparison.py --patch-img {output_base / 'original'} --patch-mask {output_base / 'mask'} --patch-result {output_base / 'result'} --output {output_base / 'patch_comparison.png'} --title 'Real 64x64 Patch Inference Results'")
+
+    if patch_count > 0 and not args.no_comparison:
+        create_training_comparison(
+            patch_img_dir=str(output_base / 'original'),
+            patch_mask_dir=str(output_base / 'mask'),
+            patch_result_dir=str(output_base / 'result'),
+            output_path=str(output_base / 'comparison.png'),
+            comparison_title=args.title,
+        )
 
 if __name__ == '__main__':
     main()

@@ -184,6 +184,21 @@ patch-comparison:
 	make training-comparison
 	@echo "✓ Complete patch comparison ready: outputs/samples/patch_training_comparison.png"
 
+# One command: extract real 64×64 patches, run inference, create comparison.png
+patch-eval:
+	@if [ ! -f checkpoints/best.pth ]; then \
+		echo "Error: checkpoints/best.pth not found. Train model first."; \
+		exit 1; \
+	fi
+	python scripts/patch_inference.py \
+		--ckpt checkpoints/best.pth \
+		--annotations $(VAL_ANN) \
+		--images $(VAL_IMG) \
+		--output-dir outputs/vessel_safe_patches \
+		--num-images 4 \
+		--patches-per-image 3
+	@echo "✓ Patch evaluation ready: outputs/vessel_safe_patches/comparison.png"
+
 # Mask and vessel overview generation
 mask-overview:
 	@echo "Creating comprehensive mask and vessel overview..."
