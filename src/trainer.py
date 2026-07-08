@@ -28,6 +28,37 @@ def set_seed(seed: int):
         torch.backends.cudnn.benchmark = False
 
 
+def _seeded_eval_loss(model, loader, criterion, device, use_amp, seed):
+    """Loss on a fixed train subset in eval mode with fixed RNG.
+
+    Makes the train loss directly comparable to the val loss: same model state
+    (end of epoch, eval mode) and identical patches/masks every epoch. The
+    regular running train loss is an epoch average in train mode and therefore
+    systematically higher.
+    """
+    py_state, np_state, torch_state = random.getstate(), np.random.get_state(), torch.get_rng_state()
+    cuda_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    total = 0.0
+    with torch.no_grad():
+        for img, mask in loader:
+            img, mask = img.to(device), mask.to(device)
+            with torch.amp.autocast('cuda', enabled=use_amp):
+                output = model(img, mask)
+                loss, _ = criterion(output, img, mask)
+            total += loss.item()
+
+    random.setstate(py_state)
+    np.random.set_state(np_state)
+    torch.set_rng_state(torch_state)
+    if cuda_state is not None:
+        torch.cuda.set_rng_state_all(cuda_state)
+    return total / max(1, len(loader))
+
+
 def train_model(
     # Data paths
     train_img='data/arcade/syntax/train/images',
@@ -143,6 +174,13 @@ def train_model(
     val_loader   = DataLoader(val_dataset,   batch_size=batch_size,
                               shuffle=False, num_workers=num_workers)
 
+    # Fixed train subset for fair train-vs-val comparison (see _seeded_eval_loss).
+    # num_workers=0 so the seeded main-process RNG governs patch/mask sampling.
+    train_eval_subset = torch.utils.data.Subset(
+        train_dataset, list(range(min(len(train_dataset), 500))))
+    train_eval_loader = DataLoader(train_eval_subset, batch_size=batch_size,
+                                   shuffle=False, num_workers=0)
+
     base_train_imgs = len(train_dataset.image_ids)
     base_val_imgs = len(val_dataset.image_ids)
     logger.info(f"Patch mode enabled: {patches_per_image} patches per image")
@@ -195,7 +233,7 @@ def train_model(
 
     drive_log_path = os.path.join(drive_dir, 'training_log.csv') if use_drive else None
 
-    csv_header = 'epoch,train_loss,val_loss,val_l1_loss,val_ssim_loss,val_psnr,val_ssim,val_hole_psnr,val_hole_ssim,val_wasserstein,val_rmse,val_kl_divergence,loss_change,psnr_realistic,learning_pattern\n'
+    csv_header = 'epoch,train_loss,train_eval_loss,val_loss,val_l1_loss,val_ssim_loss,val_psnr,val_ssim,val_hole_psnr,val_hole_ssim,val_wasserstein,val_rmse,val_kl_divergence,loss_change,psnr_realistic,learning_pattern\n'
     if not os.path.exists(log_path):
         with open(log_path, 'w') as f:
             f.write(csv_header)
@@ -262,6 +300,8 @@ def train_model(
 
         # -- Validate --
         model.eval()
+        train_eval_loss = _seeded_eval_loss(model, train_eval_loader, criterion,
+                                            device, use_amp, seed)
         val_loss = 0.0
         val_l1_loss = 0.0
         val_ssim_loss = 0.0
@@ -335,12 +375,13 @@ def train_model(
         scheduler.step()
 
         gan_info = f" | d_loss={train_d_loss:.4f}" if gan_active else ""
-        logger.info(f"Epoch {epoch:03d} | train_loss={train_loss:.4f}{gan_info} | val_loss={val_loss:.4f} | val_psnr={val_psnr:.2f} dB | val_ssim={val_ssim:.4f} | hole_psnr={val_hole_psnr:.2f} dB | hole_ssim={val_hole_ssim:.4f} | val_wasserstein={val_wasserstein:.2f} | val_rmse={val_rmse:.2f} | val_kl={val_kl_divergence:.3f}")
+        logger.info(f"Epoch {epoch:03d} | train_loss={train_loss:.4f} | train_eval_loss={train_eval_loss:.4f}{gan_info} | val_loss={val_loss:.4f} | val_psnr={val_psnr:.2f} dB | val_ssim={val_ssim:.4f} | hole_psnr={val_hole_psnr:.2f} dB | hole_ssim={val_hole_ssim:.4f} | val_wasserstein={val_wasserstein:.2f} | val_rmse={val_rmse:.2f} | val_kl={val_kl_divergence:.3f}")
 
         # Store current epoch metrics
         current_metrics = {
             'epoch': epoch,
             'train_loss': train_loss,
+            'train_eval_loss': train_eval_loss,
             'val_loss': val_loss,
             'val_l1_loss': val_l1_loss,
             'val_ssim_loss': val_ssim_loss,
@@ -373,7 +414,7 @@ def train_model(
         else:
             learning_pattern = "normal"
 
-        csv_row = (f"{epoch},{train_loss:.4f},{val_loss:.4f},{val_l1_loss:.4f},{val_ssim_loss:.4f},"
+        csv_row = (f"{epoch},{train_loss:.4f},{train_eval_loss:.4f},{val_loss:.4f},{val_l1_loss:.4f},{val_ssim_loss:.4f},"
                    f"{val_psnr:.2f},{val_ssim:.4f},{val_hole_psnr:.2f},{val_hole_ssim:.4f},"
                    f"{val_wasserstein:.4f},{val_rmse:.4f},"
                    f"{val_kl_divergence:.4f},{loss_change:.4f},{psnr_realistic},{learning_pattern}\n")

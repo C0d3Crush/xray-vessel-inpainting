@@ -29,6 +29,8 @@ def plot_training_log(csv_path, output_path=None):
 
         # Plot 1: Training + Validation Loss combined
         axes[0].plot(df['epoch'], df['train_loss'], 'b-', linewidth=2, label='Train Loss')
+        if 'train_eval_loss' in df.columns:
+            axes[0].plot(df['epoch'], df['train_eval_loss'], 'b--', linewidth=2, label='Train Loss (eval mode)')
         if 'val_loss' in df.columns:
             axes[0].plot(df['epoch'], df['val_loss'], 'r-', linewidth=2, label='Val Loss')
             axes[0].legend(fontsize=9)
@@ -84,6 +86,8 @@ def plot_training_log(csv_path, output_path=None):
 
         # Plot 1: Training + Validation Loss combined
         axes[0].plot(df['epoch'], df['train_loss'], 'b-', linewidth=2, label='Train Loss')
+        if 'train_eval_loss' in df.columns:
+            axes[0].plot(df['epoch'], df['train_eval_loss'], 'b--', linewidth=2, label='Train Loss (eval mode)')
         if 'val_loss' in df.columns:
             axes[0].plot(df['epoch'], df['val_loss'], 'r-', linewidth=2, label='Val Loss')
             axes[0].legend(fontsize=9)
